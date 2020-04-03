@@ -260,7 +260,10 @@ def main_render():
         most_contributing_instruction_for_source_line = defaultdict(lambda : [0, 0])
 
         for i in instructions[stack_entry]:
-            inst_contributing_per_line = 1.0 / len(inst_to_source_line[i])
+            try:
+                inst_contributing_per_line = 1.0 / len(inst_to_source_line[i])
+            except ZeroDivisionError:
+                inst_contributing_per_line = 0
             for l in inst_to_source_line[i]:
                 source_lines.add(l)
                 contributing[l] += inst_contributing_per_line
