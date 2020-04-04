@@ -11,9 +11,12 @@ import solcx.install
 import pickle
 from collections import defaultdict, namedtuple
 from itertools import chain
+import os.path
+
 
 # transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838' # Flash Loan Attack
-transaction = '0x7155e10930c1b1e5afae6781cc09bbd4150f6dda' # test1
+# transaction = '0xa2f866c2b391c9d35d8f18edb006c9a872c0014b992e4b586cc2f11dc2b24ebd' # test1
+transaction = '0xd04f241684acc1cc2ce4233fd169c982992e345c241d281a601fcba4dce3be84' # test2
 
 def get_trace(hash):
     payload = {"jsonrpc":"2.0","id":8,"method":"debug_traceTransaction", "params":
@@ -27,12 +30,22 @@ def get_trace(hash):
 
 calls = {'CALL', 'CALLCODE', 'STATICCALL', 'DELEGATECALL', 'CREATE', 'CREATE2'}
 
-trace = get_trace(transaction)['result']['structLogs']
 
-with open("file.pkl","wb") as f:
-   pickle.dump(trace,f)
-with open("./transaction_debugger/file.pkl","rb") as f:
-    trace = pickle.load(f)
+filename = transaction + '.pkl'
+trace = None
+
+try:
+    if os.path.isfile(filename):
+        with open(filename,"rb") as f:
+            trace = pickle.load(f)
+    else:
+        trace = get_trace(transaction)['result']['structLogs']
+
+        with open(filename,"wb") as f:
+            pickle.dump(trace,f)
+except Exception as e:
+    print(e)
+    exit(1)
 
 
 class EVMExecuctionStack:
