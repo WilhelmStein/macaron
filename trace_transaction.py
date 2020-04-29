@@ -12,11 +12,18 @@ import pickle
 from collections import defaultdict, namedtuple
 from itertools import chain
 import os.path
+import web3
 
+# transaction = '0x0ec3f2488a93839524add10ea229e773f6bc891b4eb4794c3337d4495263790b'    # DAO Attack
+# transaction = '0x863df6bfa4469f3ead0be8f9f2aae51c91a907b4'                            # Parity Attack
+# transaction = '0xd6c24da4e17aa18db03f9df46f74f119fa5c2314cb1149cd3f88881ddc475c5a'    # DAOSTACK Attack - Self Destructed :(
+# transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack
 
-# transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838' # Flash Loan Attack
 # transaction = '0xa2f866c2b391c9d35d8f18edb006c9a872c0014b992e4b586cc2f11dc2b24ebd' # test1
-transaction = '0xd04f241684acc1cc2ce4233fd169c982992e345c241d281a601fcba4dce3be84' # test2
+# transaction = '0xc1f534b03e5d4840c091c54224c3381b892b8f1a2869045f49913f3cfaf95ba7' # Million Money
+# transaction = '0xa537c0ae6172fc43ddadd0f94d2821ae278fae4ba8147ea7fa882fa9b0a6a51a' # Greed Pit
+# transaction = '0x51f37d7b41e6864d1190d8f596e956501d9f4e0f8c598dbcbbc058c10b25aa3b' # Dust
+transaction = '0x3f0a309ebbc5642ec18047fb902c383b33e951193bda6402618652e9234c9abb' # Tokens
 
 def get_trace(hash):
     payload = {"jsonrpc":"2.0","id":8,"method":"debug_traceTransaction", "params":
@@ -27,6 +34,15 @@ def get_trace(hash):
     assert response.status_code == 200, response
     response_json = json.loads(response.text)
     return response_json
+
+
+def get_starting_contract(hash):
+    payload = {"jsonrpc":"2.0","id":8,"method":"eth_getTransactionByHash", "params": [ hash ] }
+    response = requests.post('http://node.web3api.com:8545/', json = payload, timeout = 100, stream = True)
+    assert response.status_code == 200, response
+    response_json = json.loads(response.text)
+    assert response_json['result']['to'] != None
+    return response_json['result']['to']
 
 calls = {'CALL', 'CALLCODE', 'STATICCALL', 'DELEGATECALL', 'CREATE', 'CREATE2'}
 
@@ -83,8 +99,18 @@ class EVMExecuctionStack:
     def head(self):
         return self.trace[-1]
         
+conn = pymysql.connect(
+    host="127.0.0.1",
+    port=int(3307),
+    user="tracer",
+    passwd="a=$G5)Z]vqY6]}w{",
+    db="gigahorse",
+    charset='utf8mb4')
+
+# entry = pd.read_sql_query(f'select * from ', conn)
+
 evm_stack = EVMExecuctionStack()
-evm_stack.entry('0' * 40)
+evm_stack.entry(get_starting_contract(transaction)[2:])
 instructions = defaultdict(set)
 instructions_order = defaultdict(lambda : defaultdict(lambda : 0xFFFF))
 
@@ -120,6 +146,7 @@ query_source = """
   and a.network = 'Ethereum'
 """
 
+
 def make_compiler_json(filename, optimization_enabled = False, optimization_runs = 0, evmVersion = None):
     settings = {
         'optimizer': {
@@ -129,7 +156,8 @@ def make_compiler_json(filename, optimization_enabled = False, optimization_runs
         'evmVersion': evmVersion, 
         'outputSelection': {
             "*": {
-                "*": [ 'evm.deployedBytecode.sourceMap', 'evm.deployedBytecode.object' ]
+                "*": [ 'evm.deployedBytecode.sourceMap', 'evm.deployedBytecode.object' ],
+                "": ["ast"]
             }
         }
       }
@@ -145,6 +173,7 @@ def make_compiler_json(filename, optimization_enabled = False, optimization_runs
       'settings': settings
     }
 
+
 LINE_SPLIT_DELIMETER = '\n'
 
 def char_to_line(source):
@@ -155,15 +184,7 @@ def char_to_line(source):
         if s == LINE_SPLIT_DELIMETER:
             line +=1
     return res
-        
 
-conn = pymysql.connect(
-    host="127.0.0.1",
-    port=int(3307),
-    user="tracer",
-    passwd="a=$G5)Z]vqY6]}w{",
-    db="gigahorse",
-    charset='utf8mb4')
 
 def process_compiler_version(compiler):
     print(compiler)
@@ -173,6 +194,7 @@ def process_compiler_version(compiler):
     if float(compiler_processed[1:4] + compiler_processed[6:]) < 0.411:
         return 'v0.4.11'
     return compiler_processed
+
 
 def compile_solidity(code, compiler, optimization, other_settings, **kwargs):
     assert isinstance(code, str)
@@ -194,12 +216,14 @@ def compile_solidity(code, compiler, optimization, other_settings, **kwargs):
         print("SOLC Compiler error")
         print(e)
         return None
-    return list(output_js['contracts'].values())[0]
+    
+    return (list(output_js['sources'].values())[0], list(output_js['contracts'].values())[0]) # TODO Clean Up 
 
 colors = [f'\033[38;5;{15 if c<244 else 0}m\033[48;5;{c}m' for c in range(255, 233, -1)]
 color_unused = '\033[38;5;0m\033[48;5;232m'
 color_entrypoint = '\033[38;5;45m\033[48;5;15m'
 color_important = '\033[38;5;9m\033[48;5;15m'
+
 
 def explain_legend():
     color_line = 'The background color is the order in which the statement is executed............'
@@ -210,6 +234,7 @@ def explain_legend():
     print(color_entrypoint + '  Entry Point')
     print(color_unused + "  Unexecuted")
 
+
 def get_contract_from_db(a):
     res = pd.read_sql_query(query_source%a, conn)
     if len(res) == 0:
@@ -218,6 +243,7 @@ def get_contract_from_db(a):
         if sum(v is None for v in row.values) > 1:
             return None
         return row
+
 
 def main_render():
     explain_legend()
@@ -233,7 +259,7 @@ def main_render():
         bytecode = res['hex_bytecode']
         source_map = res['source_map']
         if source_map is None:
-            solidity_file = compile_solidity(**res)
+            solidity_ast, solidity_file = compile_solidity(**res)
             if solidity_file is None:
                 continue
             contract = solidity_file[contract_name]
@@ -307,6 +333,7 @@ def main_render():
                     continue
             output2.append(o)
         print(LINE_SPLIT_DELIMETER.join(output2).replace('\r', ''))
+
 
 if __name__ == '__main__':
     try:
