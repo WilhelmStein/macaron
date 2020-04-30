@@ -22,8 +22,8 @@ import web3
 # transaction = '0xa2f866c2b391c9d35d8f18edb006c9a872c0014b992e4b586cc2f11dc2b24ebd' # test1
 # transaction = '0xc1f534b03e5d4840c091c54224c3381b892b8f1a2869045f49913f3cfaf95ba7' # Million Money
 # transaction = '0xa537c0ae6172fc43ddadd0f94d2821ae278fae4ba8147ea7fa882fa9b0a6a51a' # Greed Pit
-# transaction = '0x51f37d7b41e6864d1190d8f596e956501d9f4e0f8c598dbcbbc058c10b25aa3b' # Dust
-transaction = '0x3f0a309ebbc5642ec18047fb902c383b33e951193bda6402618652e9234c9abb' # Tokens
+transaction = '0x51f37d7b41e6864d1190d8f596e956501d9f4e0f8c598dbcbbc058c10b25aa3b' # Dust
+# transaction = '0x3f0a309ebbc5642ec18047fb902c383b33e951193bda6402618652e9234c9abb' # Tokens
 
 def get_trace(hash):
     payload = {"jsonrpc":"2.0","id":8,"method":"debug_traceTransaction", "params":
@@ -44,10 +44,14 @@ def get_starting_contract(hash):
     assert response_json['result']['to'] != None
     return response_json['result']['to']
 
+
 calls = {'CALL', 'CALLCODE', 'STATICCALL', 'DELEGATECALL', 'CREATE', 'CREATE2'}
 
 
-filename = transaction + '.pkl'
+if not os.path.exists('traces'):
+    os.makedirs('traces')
+
+filename = 'traces/' + transaction + '.pkl'
 trace = None
 
 try:
@@ -99,6 +103,7 @@ class EVMExecuctionStack:
     def head(self):
         return self.trace[-1]
         
+
 conn = pymysql.connect(
     host="127.0.0.1",
     port=int(3307),
@@ -176,6 +181,7 @@ def make_compiler_json(filename, optimization_enabled = False, optimization_runs
 
 LINE_SPLIT_DELIMETER = '\n'
 
+
 def char_to_line(source):
     line = 0
     res = {}
@@ -217,7 +223,8 @@ def compile_solidity(code, compiler, optimization, other_settings, **kwargs):
         print(e)
         return None
     
-    return (list(output_js['sources'].values())[0], list(output_js['contracts'].values())[0]) # TODO Clean Up 
+    return (list(output_js['sources'].values())[0]['ast'], list(output_js['contracts'].values())[0]) # TODO Clean Up 
+
 
 colors = [f'\033[38;5;{15 if c<244 else 0}m\033[48;5;{c}m' for c in range(255, 233, -1)]
 color_unused = '\033[38;5;0m\033[48;5;232m'
@@ -245,29 +252,57 @@ def get_contract_from_db(a):
         return row
 
 
+validAstTypes = ['PragmaDirective','VariableDeclaration', 'ParameterList', 'ExpressionStatement', 'FunctionCall']
+invalidAstTypes = ['']
+
+def searchAst(ast, fro, length):
+
+    node_s, node_r, node_m = ast['src'].split(':')
+
+    if fro == int(node_s) and length == int(node_r):
+        return ast
+    # TODO Add source searching
+
+
+    for node in ( ast['body']['statements'] if 'body' in ast else [] ) + ( ast['nodes'] if 'nodes' in ast else [] ):
+        returned_node = searchAst(node, fro, length)
+
+        if returned_node is None:
+            continue
+        else:
+            return returned_node
+
+    return None
+
+
 def main_render():
     explain_legend()
     for stack_entry in evm_stack.trace:
         print(color_important + '#'*80)
         print(f'EVM is running code at {stack_entry.address}. Reason: {stack_entry.reason}')
         res = get_contract_from_db(stack_entry.address)
+
         if res is None:
             print("Source not found in db, skipping...")
             continue
+
         code = res['code']
         contract_name = res['contract_name']
         bytecode = res['hex_bytecode']
         source_map = res['source_map']
+        ast, solidity_file = compile_solidity(**res)
+
         if source_map is None:
-            solidity_ast, solidity_file = compile_solidity(**res)
-            if solidity_file is None:
+            if solidity_file is None or ast is None:
                 continue
+
             contract = solidity_file[contract_name]
             source_map = contract['evm']['deployedBytecode']['sourceMap']
             object = contract['evm']['deployedBytecode']['object']
         else:
             object = bytecode
 
+        inst_to_ast_node = {}
         inst_to_source_line = defaultdict(set)
         source_char_to_line = char_to_line(code)
         
@@ -277,22 +312,33 @@ def main_render():
             print('Compiled bytecode does not match perfectly, but is the same size')
         else:
             print(f'Warning: Deployed bytecode is length {len(bytecode)}, but compiled bytecode is length {len(object)}')
+
         pc = 0
         for s in source_map.split(';'):
             if s:
                 s_split = s.split(':')
                 if s_split[0]:
                     fro = int(s_split[0])
+
                 if len(s_split) > 1 and s_split[1]:
                     length = int(s_split[1])
+
+                
+            ast_node = searchAst(ast, fro, length)
+            
+            if ast_node and ast_node['nodeType'] in validAstTypes: 
+                inst_to_ast_node[pc] = ast_node
+
             inst_to_source_line[pc].update(
                 source_char_to_line[c] for c in range(fro, fro+length) 
             )
             opcode = int(object[pc * 2] + object[pc * 2 + 1], 16)
+
             if 0x60 <= opcode < 0x80:
                 # it's a push instruction, increment by extra size of instruction
                 pc += (opcode - 0x5f)
             pc += 1
+
         contributing = defaultdict(float)
         source_lines = set()
         source_lines_order = defaultdict(lambda : 0xFFFF)
@@ -303,10 +349,12 @@ def main_render():
                 inst_contributing_per_line = 1.0 / len(inst_to_source_line[i])
             except ZeroDivisionError:
                 inst_contributing_per_line = 0
+
             for l in inst_to_source_line[i]:
                 source_lines.add(l)
                 contributing[l] += inst_contributing_per_line
                 i_m, c_m = most_contributing_instruction_for_source_line[l]
+
                 if inst_contributing_per_line > c_m:
                     most_contributing_instruction_for_source_line[l] = i, inst_contributing_per_line
 
@@ -314,24 +362,29 @@ def main_render():
             source_lines_order[l] = instructions_order[stack_entry][i]
 
         source_lines_color = {}
-
         sorted_source_lines_order = sorted(source_lines_order.items(), key = lambda a: a[1] * 0xFFFF + a[0])
+
         for i, (s, _) in enumerate(sorted_source_lines_order):
             source_lines_color[s] = colors[int((float(i) / len(source_lines)) * len(colors))]
+
         output = []
         elipses = False
+
         for l, c in enumerate(code.split(LINE_SPLIT_DELIMETER)):
             if l in source_lines and contributing[l] >= 2:
                 output.append(source_lines_color[l] + c)
             else:
                 output.append(color_unused + c)
+
         # postprocess
         output2 = []
         for i, o in enumerate(output):
             if o.startswith(color_unused):
                 if all(output[j].startswith(color_unused) for j in range(max(i-2, 0), min(i+2, len(output)-1))):
                     continue
+
             output2.append(o)
+
         print(LINE_SPLIT_DELIMETER.join(output2).replace('\r', ''))
 
 
