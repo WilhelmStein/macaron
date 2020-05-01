@@ -3,135 +3,14 @@
 #ssh contract-library.com -L 3307:127.0.0.1:3306 -N
 import pymysql
 import pandas as pd
-import requests
-import json
 import dill
 import solcx
 import solcx.install
-import pickle
-from collections import defaultdict, namedtuple
+from collections import defaultdict
 from itertools import chain
-import os.path
-import web3
-
-# transaction = '0x0ec3f2488a93839524add10ea229e773f6bc891b4eb4794c3337d4495263790b'    # DAO Attack
-# transaction = '0x863df6bfa4469f3ead0be8f9f2aae51c91a907b4'                            # Parity Attack
-# transaction = '0xd6c24da4e17aa18db03f9df46f74f119fa5c2314cb1149cd3f88881ddc475c5a'    # DAOSTACK Attack - Self Destructed :(
-# transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack
-
-# transaction = '0xa2f866c2b391c9d35d8f18edb006c9a872c0014b992e4b586cc2f11dc2b24ebd' # test1
-# transaction = '0xc1f534b03e5d4840c091c54224c3381b892b8f1a2869045f49913f3cfaf95ba7' # Million Money
-# transaction = '0xa537c0ae6172fc43ddadd0f94d2821ae278fae4ba8147ea7fa882fa9b0a6a51a' # Greed Pit
-transaction = '0x51f37d7b41e6864d1190d8f596e956501d9f4e0f8c598dbcbbc058c10b25aa3b' # Dust
-# transaction = '0x3f0a309ebbc5642ec18047fb902c383b33e951193bda6402618652e9234c9abb' # Tokens
-
-def get_trace(hash):
-    payload = {"jsonrpc":"2.0","id":8,"method":"debug_traceTransaction", "params":
-               [ hash, {"disableStorage":True,"disableMemory":True,"disableStack":False,"fullStorage":False}
-               ]
-    }
-    response = requests.post('http://node.web3api.com:8545/', json = payload, timeout = 100, stream = True)
-    assert response.status_code == 200, response
-    response_json = json.loads(response.text)
-    return response_json
-
-
-def get_starting_contract(hash):
-    payload = {"jsonrpc":"2.0","id":8,"method":"eth_getTransactionByHash", "params": [ hash ] }
-    response = requests.post('http://node.web3api.com:8545/', json = payload, timeout = 100, stream = True)
-    assert response.status_code == 200, response
-    response_json = json.loads(response.text)
-    assert response_json['result']['to'] != None
-    return response_json['result']['to']
-
-
-calls = {'CALL', 'CALLCODE', 'STATICCALL', 'DELEGATECALL', 'CREATE', 'CREATE2'}
-
-
-if not os.path.exists('traces'):
-    os.makedirs('traces')
-
-filename = 'traces/' + transaction + '.pkl'
-trace = None
-
-try:
-    if os.path.isfile(filename):
-        with open(filename,"rb") as f:
-            trace = pickle.load(f)
-    else:
-        trace = get_trace(transaction)['result']['structLogs']
-
-        with open(filename,"wb") as f:
-            pickle.dump(trace,f)
-except Exception as e:
-    print(e)
-    exit(1)
-
-
-class EVMExecuctionStack:
-
-    StackEntry = namedtuple('StackEntry', ['address', 'reason', 'vmstate'])
-    
-    def __init__(self):
-        self.stack = []
-        self.trace = []
-        order = 0
-
-    def entry(self, address):
-        self.stack.append([address, 'ENTRY'])
-        self.state = 0
-        self.order = 0
-        self.do_trace()
-        
-    def do_trace(self):
-        self.trace.append(self.StackEntry(*(self.stack[-1] + [self.state])))
-
-
-    def call(self, address, opcode):
-        self.stack.append([address, opcode])
-        self.state += 1
-        self.order = 0
-        self.do_trace()
-
-    def ret(self):
-        self.stack.pop()
-        self.stack[-1][1] = 'RETURN from previous contract'
-        self.state += 1
-        self.order = 0
-        self.do_trace()
-
-    def head(self):
-        return self.trace[-1]
-        
-
-conn = pymysql.connect(
-    host="127.0.0.1",
-    port=int(3307),
-    user="tracer",
-    passwd="a=$G5)Z]vqY6]}w{",
-    db="gigahorse",
-    charset='utf8mb4')
+import evm_stack
 
 # entry = pd.read_sql_query(f'select * from ', conn)
-
-evm_stack = EVMExecuctionStack()
-evm_stack.entry(get_starting_contract(transaction)[2:])
-instructions = defaultdict(set)
-instructions_order = defaultdict(lambda : defaultdict(lambda : 0xFFFF))
-
-prev_depth = 0
-for t in trace:
-    if t['depth'] < prev_depth:
-        evm_stack.ret()
-    current_stack_entry = evm_stack.head()
-    pc = t['pc']
-    instructions[current_stack_entry].add(pc)
-    instructions_order[current_stack_entry][pc] = min(instructions_order[current_stack_entry][pc], evm_stack.order)
-    evm_stack.order += 1
-    if t['op'] in calls:
-        # take next address from the stack, cast to 160-bits
-        evm_stack.call(t['stack'][-2][-40:], t['op'])
-    prev_depth = t['depth']
 
 
 query_decompiled = """
@@ -242,7 +121,7 @@ def explain_legend():
     print(color_unused + "  Unexecuted")
 
 
-def get_contract_from_db(a):
+def get_contract_from_db(a, conn):
     res = pd.read_sql_query(query_source%a, conn)
     if len(res) == 0:
         return None
@@ -275,12 +154,12 @@ def searchAst(ast, fro, length):
     return None
 
 
-def main_render():
+def main_render(stack, conn):
     explain_legend()
-    for stack_entry in evm_stack.trace:
+    for stack_entry in stack.trace:
         print(color_important + '#'*80)
         print(f'EVM is running code at {stack_entry.address}. Reason: {stack_entry.reason}')
-        res = get_contract_from_db(stack_entry.address)
+        res = get_contract_from_db(stack_entry.address, conn)
 
         if res is None:
             print("Source not found in db, skipping...")
@@ -344,7 +223,7 @@ def main_render():
         source_lines_order = defaultdict(lambda : 0xFFFF)
         most_contributing_instruction_for_source_line = defaultdict(lambda : [0, 0])
 
-        for i in instructions[stack_entry]:
+        for i in stack.instructions[stack_entry]:
             try:
                 inst_contributing_per_line = 1.0 / len(inst_to_source_line[i])
             except ZeroDivisionError:
@@ -359,7 +238,7 @@ def main_render():
                     most_contributing_instruction_for_source_line[l] = i, inst_contributing_per_line
 
         for l, (i, _) in most_contributing_instruction_for_source_line.items():
-            source_lines_order[l] = instructions_order[stack_entry][i]
+            source_lines_order[l] = stack.instructions_order[stack_entry][i]
 
         source_lines_color = {}
         sorted_source_lines_order = sorted(source_lines_order.items(), key = lambda a: a[1] * 0xFFFF + a[0])
@@ -390,7 +269,29 @@ def main_render():
 
 if __name__ == '__main__':
     try:
-        main_render()
+        # transaction = '0x0ec3f2488a93839524add10ea229e773f6bc891b4eb4794c3337d4495263790b'    # DAO Attack
+        # transaction = '0x863df6bfa4469f3ead0be8f9f2aae51c91a907b4'                            # Parity Attack
+        # transaction = '0xd6c24da4e17aa18db03f9df46f74f119fa5c2314cb1149cd3f88881ddc475c5a'    # DAOSTACK Attack - Self Destructed :(
+        # transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack
+
+        # transaction = '0xa2f866c2b391c9d35d8f18edb006c9a872c0014b992e4b586cc2f11dc2b24ebd' # test1
+        # transaction = '0xc1f534b03e5d4840c091c54224c3381b892b8f1a2869045f49913f3cfaf95ba7' # Million Money
+        # transaction = '0xa537c0ae6172fc43ddadd0f94d2821ae278fae4ba8147ea7fa882fa9b0a6a51a' # Greed Pit
+        transaction = '0x51f37d7b41e6864d1190d8f596e956501d9f4e0f8c598dbcbbc058c10b25aa3b' # Dust
+        # transaction = '0x3f0a309ebbc5642ec18047fb902c383b33e951193bda6402618652e9234c9abb' # Tokens
+
+        conn = pymysql.connect(
+            host="127.0.0.1",
+            port=int(3307),
+            user="tracer",
+            passwd="a=$G5)Z]vqY6]}w{",
+            db="gigahorse",
+            charset='utf8mb4')
+
+        stack = evm_stack.EVMExecuctionStack()
+        stack.import_transaction(transaction)
+
+        main_render(stack, conn)
     except Exception:
         import pdb
         import traceback
