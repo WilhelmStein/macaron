@@ -136,18 +136,18 @@ invalidAstTypes = ['PragmaDirective','VariableDeclaration']
 
 def search_ast(ast, fro, length):
 
-    # if 'src' not in ast:
-    #     return None
+    if 'src' in ast:
+        node_s, node_r, node_m = ast['src'].split(':')
 
-    node_s, node_r, node_m = ast['src'].split(':')
+        if fro == int(node_s) and length == int(node_r):
+            return ast
 
-    if fro == int(node_s) and length == int(node_r):
-        return ast
-    # TODO Add source searching
+    # TODO Add source file matching
 
 
     nodes = []
-    nodes += ast['body']['statements'] if 'body' in ast else []
+    nodes += [ast['body']] if 'body' in ast and ast['body'] is not None else []
+    nodes += ast['statements'] if 'statements' in ast else []
     nodes += [ast['expression']] if 'expression' in ast else []
     nodes += [ast['leftHandSide']]  if 'leftHandSide' in ast else []
     nodes += [ast['rightHandSide']] if 'rightHandSide' in ast else []
@@ -252,12 +252,12 @@ if __name__ == '__main__':
         # transaction = '0x0ec3f2488a93839524add10ea229e773f6bc891b4eb4794c3337d4495263790b'    # DAO Attack
         # transaction = '0x863df6bfa4469f3ead0be8f9f2aae51c91a907b4'                            # Parity Attack
         # transaction = '0xd6c24da4e17aa18db03f9df46f74f119fa5c2314cb1149cd3f88881ddc475c5a'    # DAOSTACK Attack - Self Destructed :(
-        # transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack
+        transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack
 
         # transaction = '0xa2f866c2b391c9d35d8f18edb006c9a872c0014b992e4b586cc2f11dc2b24ebd' # test1
         # transaction = '0xc1f534b03e5d4840c091c54224c3381b892b8f1a2869045f49913f3cfaf95ba7' # Million Money
         # transaction = '0xa537c0ae6172fc43ddadd0f94d2821ae278fae4ba8147ea7fa882fa9b0a6a51a' # Greed Pit
-        transaction = '0x51f37d7b41e6864d1190d8f596e956501d9f4e0f8c598dbcbbc058c10b25aa3b' # Dust
+        # transaction = '0x51f37d7b41e6864d1190d8f596e956501d9f4e0f8c598dbcbbc058c10b25aa3b' # Dust
         # transaction = '0x3f0a309ebbc5642ec18047fb902c383b33e951193bda6402618652e9234c9abb' # Tokens
 
         conn = pymysql.connect(
