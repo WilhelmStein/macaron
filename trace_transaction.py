@@ -131,10 +131,13 @@ def get_contract_from_db(a, conn):
         return row
 
 
-validAstTypes = ['PragmaDirective','VariableDeclaration', 'ParameterList', 'ExpressionStatement', 'FunctionCall']
-invalidAstTypes = ['']
+validAstTypes = ['ParameterList', 'ExpressionStatement', 'FunctionCall']
+invalidAstTypes = ['PragmaDirective','VariableDeclaration']
 
-def searchAst(ast, fro, length):
+def search_ast(ast, fro, length):
+
+    # if 'src' not in ast:
+    #     return None
 
     node_s, node_r, node_m = ast['src'].split(':')
 
@@ -143,8 +146,17 @@ def searchAst(ast, fro, length):
     # TODO Add source searching
 
 
-    for node in ( ast['body']['statements'] if 'body' in ast else [] ) + ( ast['nodes'] if 'nodes' in ast else [] ):
-        returned_node = searchAst(node, fro, length)
+    nodes = []
+    nodes += ast['body']['statements'] if 'body' in ast else []
+    nodes += [ast['expression']] if 'expression' in ast else []
+    nodes += [ast['leftHandSide']]  if 'leftHandSide' in ast else []
+    nodes += [ast['rightHandSide']] if 'rightHandSide' in ast else []
+    nodes += [ast['expression']] if 'expression' in ast else []
+    nodes += ast['nodes'] if 'nodes' in ast else []
+    
+    
+    for node in nodes:
+        returned_node = search_ast(node, fro, length)
 
         if returned_node is None:
             continue
@@ -152,6 +164,16 @@ def searchAst(ast, fro, length):
             return returned_node
 
     return None
+
+
+def remove_consecutives(input_list):
+    prevElem = None
+    for elem in input_list:
+        if prevElem == elem:
+            continue
+        else:
+            prevElem = elem
+            yield elem 
 
 
 def main_render(stack, conn):
@@ -181,9 +203,6 @@ def main_render(stack, conn):
         else:
             object = bytecode
 
-        inst_to_ast_node = {}
-        inst_to_source_line = defaultdict(set)
-        source_char_to_line = char_to_line(code)
         
         if object == bytecode:
             print('Compiled bytecode matches perfectly')
@@ -193,24 +212,25 @@ def main_render(stack, conn):
             print(f'Warning: Deployed bytecode is length {len(bytecode)}, but compiled bytecode is length {len(object)}')
 
         pc = 0
+        ast_list = []
         for s in source_map.split(';'):
-            if s:
-                s_split = s.split(':')
-                if s_split[0]:
-                    fro = int(s_split[0])
 
-                if len(s_split) > 1 and s_split[1]:
-                    length = int(s_split[1])
+            # Filter out all instructions that were not part of the trace
+            if pc in stack.instructions[stack_entry]:
+                if s:
+                    s_split = s.split(':')
+                    if s_split[0]:
+                        fro = int(s_split[0])
 
-                
-            ast_node = searchAst(ast, fro, length)
-            
-            if ast_node and ast_node['nodeType'] in validAstTypes: 
-                inst_to_ast_node[pc] = ast_node
+                    if len(s_split) > 1 and s_split[1]:
+                        length = int(s_split[1])
 
-            inst_to_source_line[pc].update(
-                source_char_to_line[c] for c in range(fro, fro+length) 
-            )
+                    
+                ast_node = search_ast(ast, fro, length)
+
+                if ast_node and ast_node['nodeType'] in validAstTypes: 
+                    ast_list.append(ast_node)
+
             opcode = int(object[pc * 2] + object[pc * 2 + 1], 16)
 
             if 0x60 <= opcode < 0x80:
@@ -218,53 +238,13 @@ def main_render(stack, conn):
                 pc += (opcode - 0x5f)
             pc += 1
 
-        contributing = defaultdict(float)
-        source_lines = set()
-        source_lines_order = defaultdict(lambda : 0xFFFF)
-        most_contributing_instruction_for_source_line = defaultdict(lambda : [0, 0])
+        line_index = char_to_line(code)
 
-        for i in stack.instructions[stack_entry]:
-            try:
-                inst_contributing_per_line = 1.0 / len(inst_to_source_line[i])
-            except ZeroDivisionError:
-                inst_contributing_per_line = 0
-
-            for l in inst_to_source_line[i]:
-                source_lines.add(l)
-                contributing[l] += inst_contributing_per_line
-                i_m, c_m = most_contributing_instruction_for_source_line[l]
-
-                if inst_contributing_per_line > c_m:
-                    most_contributing_instruction_for_source_line[l] = i, inst_contributing_per_line
-
-        for l, (i, _) in most_contributing_instruction_for_source_line.items():
-            source_lines_order[l] = stack.instructions_order[stack_entry][i]
-
-        source_lines_color = {}
-        sorted_source_lines_order = sorted(source_lines_order.items(), key = lambda a: a[1] * 0xFFFF + a[0])
-
-        for i, (s, _) in enumerate(sorted_source_lines_order):
-            source_lines_color[s] = colors[int((float(i) / len(source_lines)) * len(colors))]
-
-        output = []
-        elipses = False
-
-        for l, c in enumerate(code.split(LINE_SPLIT_DELIMETER)):
-            if l in source_lines and contributing[l] >= 2:
-                output.append(source_lines_color[l] + c)
-            else:
-                output.append(color_unused + c)
-
-        # postprocess
-        output2 = []
-        for i, o in enumerate(output):
-            if o.startswith(color_unused):
-                if all(output[j].startswith(color_unused) for j in range(max(i-2, 0), min(i+2, len(output)-1))):
-                    continue
-
-            output2.append(o)
-
-        print(LINE_SPLIT_DELIMETER.join(output2).replace('\r', ''))
+        print('Displaying trace:')
+        for ast_node in remove_consecutives(ast_list):
+            node_f, node_r, node_l = ast_node['src'].split(':')
+            print("line " + str(line_index[int(node_f)] + 1) + ": " + code[int(node_f) : int(node_f) + int(node_r)])
+        print('\n')
 
 
 if __name__ == '__main__':
