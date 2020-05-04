@@ -101,24 +101,23 @@ def compile_solidity(code, compiler, optimization, other_settings, **kwargs):
         print("SOLC Compiler error")
         print(e)
         return None
-    
-    return (list(output_js['sources'].values())[0]['ast'], list(output_js['contracts'].values())[0]) # TODO Clean Up 
+
+    ast = None
+    contract = list(output_js['contracts'].values())[0]
+    source = list(output_js['sources'].values())[0]
+
+
+    if 'ast' in source:
+        ast = source['ast']
+        
+
+    return (ast, contract) # TODO Clean Up 
 
 
 colors = [f'\033[38;5;{15 if c<244 else 0}m\033[48;5;{c}m' for c in range(255, 233, -1)]
 color_unused = '\033[38;5;0m\033[48;5;232m'
 color_entrypoint = '\033[38;5;45m\033[48;5;15m'
 color_important = '\033[38;5;9m\033[48;5;15m'
-
-
-def explain_legend():
-    color_line = 'The background color is the order in which the statement is executed............'
-    n = len(color_line) // len(colors) + 1
-    
-    print(color_important + 'Legend:')
-    print(' '+ (''.join(chain.from_iterable(zip(colors, [color_line[i:i+n] for i in range(0, len(color_line), n)])))))
-    print(color_entrypoint + '  Entry Point')
-    print(color_unused + "  Unexecuted")
 
 
 def get_contract_from_db(a, conn):
@@ -131,18 +130,21 @@ def get_contract_from_db(a, conn):
         return row
 
 
-validAstTypes = ['ParameterList', 'ExpressionStatement', 'FunctionCall']
+validAstTypes = ['ParameterList', 'ExpressionStatement', 'FunctionCall', 'VariableDeclarationStatement', 'ForStatement']
 invalidAstTypes = ['PragmaDirective','VariableDeclaration']
 
 def search_ast(ast, fro, length):
 
-    if 'src' in ast:
-        node_s, node_r, node_m = ast['src'].split(':')
+    if 'src' not in ast:
+        print(ast)
 
-        if fro == int(node_s) and length == int(node_r):
-            return ast
+    curr_node_s, curr_node_r, curr_node_m = ast['src'].split(':')
+
+    if fro == int(curr_node_s) and length == int(curr_node_r):
+        return ast
 
     # TODO Add source file matching
+    # TODO Performance optimizations
 
 
     nodes = []
@@ -151,11 +153,20 @@ def search_ast(ast, fro, length):
     nodes += [ast['expression']] if 'expression' in ast else []
     nodes += [ast['leftHandSide']]  if 'leftHandSide' in ast else []
     nodes += [ast['rightHandSide']] if 'rightHandSide' in ast else []
+    nodes += [ast['initializationExpression']] if 'initializationExpression' in ast else []
+    nodes += [ast['initialValue']] if 'initialValue' in ast and ast['initialValue'] is not None else []
     nodes += [ast['expression']] if 'expression' in ast else []
     nodes += ast['nodes'] if 'nodes' in ast else []
     
     
     for node in nodes:
+        node_s, node_r, node_m = node['src'].split(':')
+
+        # A small optimization, as to avoid a full dfs of the ast
+        if int(node_s) + int(node_r) < int(fro):
+            continue
+
+
         returned_node = search_ast(node, fro, length)
 
         if returned_node is None:
@@ -177,7 +188,6 @@ def remove_consecutives(input_list):
 
 
 def main_render(stack, conn):
-    explain_legend()
     for stack_entry in stack.trace:
         print(color_important + '#'*80)
         print(f'EVM is running code at {stack_entry.address}. Reason: {stack_entry.reason}')
@@ -192,6 +202,10 @@ def main_render(stack, conn):
         bytecode = res['hex_bytecode']
         source_map = res['source_map']
         ast, solidity_file = compile_solidity(**res)
+
+        if ast is None:
+            print('AST is empty or using legacyAST, which is not supported.')
+            continue
 
         if source_map is None:
             if solidity_file is None or ast is None:
