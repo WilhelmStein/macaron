@@ -131,8 +131,12 @@ def get_contract_from_db(a, conn):
         return row
 
 
-validAstTypes = ['ParameterList', 'ExpressionStatement', 'FunctionCall', 'VariableDeclarationStatement', 'ForStatement']
-invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'VariableDeclaration']
+validAstTypes = ['ParameterList', 'ExpressionStatement', 'FunctionCall', 'VariableDeclarationStatement', 'ForStatement',
+                 'IndexAccess', 'MemberAccess', 'IfStatement', 'Literal', 'Return']
+
+invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'VariableDeclaration', 'Identifier',
+                   'BinaryOperation', 'FunctionDefinition']
+
 
 def search_ast(ast, fro, length):
 
@@ -257,10 +261,14 @@ def main_render(stack, conn):
                 ast_node = search_ast(ast, fro, length)
 
                 if ast_node is None and source_index != -1:
-                    raise Exception('Could not find ast node from source mapping: \'' + s + '\'')
-
-                if ast_node and ast_node['nodeType'] in validAstTypes: 
-                    ast_list.append(ast_node)
+                    raise Exception('Could not find ast node from source mapping: \'' + s + '\'')  
+                elif ast_node:
+                    if ast_node['nodeType'] in validAstTypes: 
+                        ast_list.append(ast_node)
+                    elif ast_node['nodeType'] in invalidAstTypes:
+                        pass
+                    else:
+                        print('Warning: Unknown AST Node type: \'' + ast_node['nodeType'] + '\' encountered during AST search.')
 
             opcode = int(object[pc * 2] + object[pc * 2 + 1], 16)
 
