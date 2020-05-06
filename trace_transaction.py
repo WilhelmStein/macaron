@@ -9,6 +9,7 @@ import solcx.install
 from collections import defaultdict
 from itertools import chain
 import evm_stack
+import collections
 
 # entry = pd.read_sql_query(f'select * from ', conn)
 
@@ -131,40 +132,51 @@ def get_contract_from_db(a, conn):
 
 
 validAstTypes = ['ParameterList', 'ExpressionStatement', 'FunctionCall', 'VariableDeclarationStatement', 'ForStatement']
-invalidAstTypes = ['PragmaDirective','VariableDeclaration']
+invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'VariableDeclaration']
 
 def search_ast(ast, fro, length):
 
     if 'src' not in ast:
-        print(ast)
+        return None
 
-    curr_node_s, curr_node_r, curr_node_m = ast['src'].split(':')
+    curr_node_s, curr_node_r, curr_node_m = map(int , ast['src'].split(':'))
 
-    if fro == int(curr_node_s) and length == int(curr_node_r):
+    if fro == curr_node_s and length == curr_node_r:
         return ast
 
     # TODO Add source file matching
     # TODO Performance optimizations
 
+    ambiguous_size_element_types = ['parameters']
+    list_element_types = ['statements', 'nodes', 'arguments', 'declarations']
+    single_element_types = [ 'body', 'expression', 'leftHandSide', 'rightHandSide', 'leftExpression', 'rightExpression',
+                             'initializationExpression', 'initialValue', 'expression', 'trueBody', 'falseBody', 'condition', 
+                             'baseExpression', 'indexExpression', 'loopExpression', 'returnParameters', 'subExpression']
 
     nodes = []
-    nodes += [ast['body']] if 'body' in ast and ast['body'] is not None else []
-    nodes += ast['statements'] if 'statements' in ast else []
-    nodes += [ast['expression']] if 'expression' in ast else []
-    nodes += [ast['leftHandSide']]  if 'leftHandSide' in ast else []
-    nodes += [ast['rightHandSide']] if 'rightHandSide' in ast else []
-    nodes += [ast['initializationExpression']] if 'initializationExpression' in ast else []
-    nodes += [ast['initialValue']] if 'initialValue' in ast and ast['initialValue'] is not None else []
-    nodes += [ast['expression']] if 'expression' in ast else []
-    nodes += ast['nodes'] if 'nodes' in ast else []
-    
+
+    for element_type in single_element_types:
+        if element_type in ast and ast[element_type]:
+            nodes.append(ast[element_type])
+
+    for element_type in list_element_types:
+        nodes += ast[element_type] if element_type in ast and ast[element_type] else []
+
+    for element_type in ambiguous_size_element_types:
+        if element_type in ast:
+            if isinstance(ast[element_type], collections.Mapping):
+                nodes.append(ast[element_type])
+            else:
+                nodes += ast[element_type]
+            
+
     
     for node in nodes:
-        node_s, node_r, node_m = node['src'].split(':')
+        # node_s, node_r, node_m = map(int, node['src'].split(':'))
 
         # A small optimization, as to avoid a full dfs of the ast
-        if int(node_s) + int(node_r) < int(fro):
-            continue
+        # if node_s < fro or node_s > fro + length:
+        #     continue
 
 
         returned_node = search_ast(node, fro, length)
@@ -207,7 +219,7 @@ def main_render(stack, conn):
             print('AST is empty or using legacyAST, which is not supported.')
             continue
 
-        if source_map is None:
+        if True:# if source_map is None:
             if solidity_file is None or ast is None:
                 continue
 
@@ -218,12 +230,12 @@ def main_render(stack, conn):
             object = bytecode
 
         
-        if object == bytecode:
-            print('Compiled bytecode matches perfectly')
-        elif len(object) == len(bytecode):
-            print('Compiled bytecode does not match perfectly, but is the same size')
-        else:
-            print(f'Warning: Deployed bytecode is length {len(bytecode)}, but compiled bytecode is length {len(object)}')
+        # if object == bytecode:
+        #     print('Compiled bytecode matches perfectly')
+        # elif len(object) == len(bytecode):
+        #     print('Compiled bytecode does not match perfectly, but is the same size')
+        # else:
+        #     print(f'Warning: Deployed bytecode is length {len(bytecode)}, but compiled bytecode is length {len(object)}')
 
         pc = 0
         ast_list = []
@@ -238,9 +250,14 @@ def main_render(stack, conn):
 
                     if len(s_split) > 1 and s_split[1]:
                         length = int(s_split[1])
-
+                    
+                    if len(s_split) > 2 and s_split[2]:
+                        source_index = int(s_split[2])
                     
                 ast_node = search_ast(ast, fro, length)
+
+                if ast_node is None and source_index != -1:
+                    raise Exception('Could not find ast node from source mapping: \'' + s + '\'')
 
                 if ast_node and ast_node['nodeType'] in validAstTypes: 
                     ast_list.append(ast_node)
@@ -256,8 +273,8 @@ def main_render(stack, conn):
 
         print('Displaying trace:')
         for ast_node in remove_consecutives(ast_list):
-            node_f, node_r, node_l = ast_node['src'].split(':')
-            print("line " + str(line_index[int(node_f)] + 1) + ": " + code[int(node_f) : int(node_f) + int(node_r)])
+            node_f, node_r, node_l = map(int, ast_node['src'].split(':'))
+            print("line " + str(line_index[node_f] + 1) + ": " + code[node_f : node_f + node_r])
         print('\n')
 
 
@@ -266,13 +283,15 @@ if __name__ == '__main__':
         # transaction = '0x0ec3f2488a93839524add10ea229e773f6bc891b4eb4794c3337d4495263790b'    # DAO Attack
         # transaction = '0x863df6bfa4469f3ead0be8f9f2aae51c91a907b4'                            # Parity Attack
         # transaction = '0xd6c24da4e17aa18db03f9df46f74f119fa5c2314cb1149cd3f88881ddc475c5a'    # DAOSTACK Attack - Self Destructed :(
-        transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack
+        # transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack
 
         # transaction = '0xa2f866c2b391c9d35d8f18edb006c9a872c0014b992e4b586cc2f11dc2b24ebd' # test1
         # transaction = '0xc1f534b03e5d4840c091c54224c3381b892b8f1a2869045f49913f3cfaf95ba7' # Million Money
         # transaction = '0xa537c0ae6172fc43ddadd0f94d2821ae278fae4ba8147ea7fa882fa9b0a6a51a' # Greed Pit
         # transaction = '0x51f37d7b41e6864d1190d8f596e956501d9f4e0f8c598dbcbbc058c10b25aa3b' # Dust
         # transaction = '0x3f0a309ebbc5642ec18047fb902c383b33e951193bda6402618652e9234c9abb' # Tokens
+        transaction = '0x6aec28ad65052132bf04c0ed621e24c007b2476fe6810389232d3ac4222c0ccc' # Doubleway
+        # transaction = '0xa228e903a5d751e4268a602bd6b938392272e4024e2071f7cd4a479e8125c370' # Saturn Network 2
 
         conn = pymysql.connect(
             host="127.0.0.1",
