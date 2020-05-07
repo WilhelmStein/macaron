@@ -131,24 +131,23 @@ def get_contract_from_db(a, conn):
         return row
 
 
-validAstTypes = ['ParameterList', 'ExpressionStatement', 'FunctionCall', 'VariableDeclarationStatement', 'ForStatement',
-                 'IndexAccess', 'MemberAccess', 'IfStatement', 'Literal', 'Return']
+validAstTypes = ['ParameterList', 'ExpressionStatement', 'FunctionCall', 'VariableDeclarationStatement', 'ForStatement', 'IfStatement',
+                 'BinaryOperation', 'Return']
 
 invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'VariableDeclaration', 'Identifier',
-                   'BinaryOperation', 'FunctionDefinition']
+                   'FunctionDefinition', 'Literal', 'MemberAccess', 'IndexAccess']
 
 
-def search_ast(ast, fro, length):
+def search_ast(ast, fro, length, source_index):
 
-    if 'src' not in ast:
-        return None
+    # if 'src' not in ast:
+    #     return None
 
     curr_node_s, curr_node_r, curr_node_m = map(int , ast['src'].split(':'))
 
-    if fro == curr_node_s and length == curr_node_r:
+    if fro == curr_node_s and length == curr_node_r and curr_node_m == source_index:
         return ast
 
-    # TODO Add source file matching
     # TODO Performance optimizations
 
     ambiguous_size_element_types = ['parameters']
@@ -178,12 +177,12 @@ def search_ast(ast, fro, length):
     for node in nodes:
         # node_s, node_r, node_m = map(int, node['src'].split(':'))
 
-        # A small optimization, as to avoid a full dfs of the ast
-        # if node_s < fro or node_s > fro + length:
+        # # A small optimization, as to avoid a full dfs of the ast
+        # if node_s < fro or node_s >= fro + length:
         #     continue
 
 
-        returned_node = search_ast(node, fro, length)
+        returned_node = search_ast(node, fro, length, source_index)
 
         if returned_node is None:
             continue
@@ -258,17 +257,19 @@ def main_render(stack, conn):
                     if len(s_split) > 2 and s_split[2]:
                         source_index = int(s_split[2])
                     
-                ast_node = search_ast(ast, fro, length)
+                
+                if source_index != -1:
+                    ast_node = search_ast(ast, fro, length, source_index)
 
-                if ast_node is None and source_index != -1:
-                    raise Exception('Could not find ast node from source mapping: \'' + s + '\'')  
-                elif ast_node:
-                    if ast_node['nodeType'] in validAstTypes: 
-                        ast_list.append(ast_node)
-                    elif ast_node['nodeType'] in invalidAstTypes:
-                        pass
-                    else:
-                        print('Warning: Unknown AST Node type: \'' + ast_node['nodeType'] + '\' encountered during AST search.')
+                    if ast_node is None:
+                        raise Exception(f"Could not find ast node from source mapping: {fro} : {length} : {source_index}")  
+                    elif ast_node:
+                        if ast_node['nodeType'] in validAstTypes: 
+                            ast_list.append(ast_node)
+                        elif ast_node['nodeType'] in invalidAstTypes:
+                            pass
+                        else:
+                            print(f"Warning: Unknown AST Node type: {ast_node['nodeType']} encountered during AST search.")
 
             opcode = int(object[pc * 2] + object[pc * 2 + 1], 16)
 
@@ -279,10 +280,11 @@ def main_render(stack, conn):
 
         line_index = char_to_line(code)
 
+
         print('Displaying trace:')
-        for ast_node in remove_consecutives(ast_list):
+        for ast_node in ast_list:#remove_consecutives(ast_list):
             node_f, node_r, node_l = map(int, ast_node['src'].split(':'))
-            print("line " + str(line_index[node_f] + 1) + ": " + code[node_f : node_f + node_r])
+            print(f'line {line_index[node_f] + 1}: {code[node_f - 1 : node_f + node_r].lstrip()}')
         print('\n')
 
 
