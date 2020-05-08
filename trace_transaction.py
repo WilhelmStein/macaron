@@ -10,9 +10,14 @@ from collections import defaultdict
 from itertools import chain
 import evm_stack
 import collections
+import os.path
+import pickle
 
-# entry = pd.read_sql_query(f'select * from ', conn)
 
+# Globals
+LINE_SPLIT_DELIMETER = '\n'
+
+color_important = '\033[36m\033[40m'
 
 query_decompiled = """
   select d.source_level, d.debug
@@ -32,6 +37,14 @@ query_source = """
 """
 
 
+validAstTypes = ['ParameterList', 'ExpressionStatement', 'FunctionCall', 'VariableDeclarationStatement', 'DoWhileStatement', 'WhileStatement', 'ForStatement', 'IfStatement',
+                  'Return']
+
+invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'VariableDeclaration', 'Identifier', 'BinaryOperation',
+                   'FunctionDefinition', 'Literal', 'MemberAccess', 'IndexAccess']
+
+
+# Function Definitions
 def make_compiler_json(filename, optimization_enabled = False, optimization_runs = 0, evmVersion = None):
     settings = {
         'optimizer': {
@@ -57,9 +70,6 @@ def make_compiler_json(filename, optimization_enabled = False, optimization_runs
       },
       'settings': settings
     }
-
-
-LINE_SPLIT_DELIMETER = '\n'
 
 
 def char_to_line(source):
@@ -97,6 +107,7 @@ def compile_solidity(code, compiler, optimization, other_settings, **kwargs):
     try:
         solcx.install_solc(compiler_processed)
         solcx.set_solc_version(compiler_processed)
+
         output_js = solcx.compile_standard(make_compiler_json('/tmp/temp.sol', optimization_enabled, optimization_runs, evmVersion), allow_paths='/tmp')
     except solcx.exceptions.SolcError as e:
         print("SOLC Compiler error")
@@ -112,16 +123,12 @@ def compile_solidity(code, compiler, optimization, other_settings, **kwargs):
         ast = source['ast']
         
 
-    return (ast, contract) # TODO Clean Up 
-
-
-colors = [f'\033[38;5;{15 if c<244 else 0}m\033[48;5;{c}m' for c in range(255, 233, -1)]
-color_unused = '\033[38;5;0m\033[48;5;232m'
-color_entrypoint = '\033[38;5;45m\033[48;5;15m'
-color_important = '\033[38;5;9m\033[48;5;15m'
+    return (ast, contract)
 
 
 def get_contract_from_db(a, conn):
+    """Connect to contract-lib.com and receive the contract's code."""
+
     res = pd.read_sql_query(query_source%a, conn)
     if len(res) == 0:
         return None
@@ -131,27 +138,26 @@ def get_contract_from_db(a, conn):
         return row
 
 
-validAstTypes = ['ParameterList', 'ExpressionStatement', 'FunctionCall', 'VariableDeclarationStatement', 'DoWhileStatement', 'WhileStatement', 'ForStatement', 'IfStatement',
-                  'Return']
-
-invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'VariableDeclaration', 'Identifier', 'BinaryOperation',
-                   'FunctionDefinition', 'Literal', 'MemberAccess', 'IndexAccess']
-
-
 def search_ast(ast, fro, length, source_index):
+    """Recursive function that searches a given AST for a node with a specific source mapping."""
+
+    if ast is None:
+        raise Exception(f"Node is None. Searching for {fro} : {length} : {source_index}")
 
     curr_node_s, curr_node_r, curr_node_m = map(int , ast['src'].split(':'))
-
+    
+    
     if fro == curr_node_s and length == curr_node_r and curr_node_m == source_index:
         return ast
-
-    # TODO Performance optimizations
+    elif curr_node_s + curr_node_r < fro or curr_node_s > fro + length: # A small optimization, as to avoid a full dfs of the ast
+        return None
+        
 
     ambiguous_size_element_types = {'parameters'}
     list_element_types = {'statements', 'nodes', 'arguments', 'declarations'}
     single_element_types = { 'body', 'expression', 'leftHandSide', 'rightHandSide', 'leftExpression', 'rightExpression',
                              'initializationExpression', 'initialValue', 'expression', 'trueBody', 'falseBody', 'condition', 
-                             'baseExpression', 'indexExpression', 'loopExpression', 'returnParameters', 'subExpression'}
+                             'baseExpression', 'indexExpression', 'loopExpression', 'returnParameters', 'subExpression', 'eventCall'}
 
     nodes = []
 
@@ -172,12 +178,6 @@ def search_ast(ast, fro, length, source_index):
 
     
     for node in nodes:
-        # node_s, node_r, node_m = map(int, node['src'].split(':'))
-
-        # # A small optimization, as to avoid a full dfs of the ast
-        # if node_s < fro or node_s >= fro + length:
-        #     continue
-
         returned_node = search_ast(node, fro, length, source_index)
 
         if returned_node is None:
@@ -187,7 +187,10 @@ def search_ast(ast, fro, length, source_index):
 
     return None
 
+
 def remove_consecutives(node_list):
+    """Remove consecutive entries from a given list."""
+
     prevNode = None
     output_list = []
 
@@ -201,15 +204,15 @@ def remove_consecutives(node_list):
 
 
 def group_instructions(instruction_node_list):
+    """Try to group bytecode instructions that correspond to the same solidity instruction"""
     
-    explored_nodes = set() #defaultdict(int)
+    explored_nodes = set()
     grouped_node_list = []
 
-    jumpOpcodes = {0x56, 0x57}
+    jumpOpcodes = {0x56, 0x57, 0x5B}
 
     for (opcode, node) in instruction_node_list:
 
-        
         if opcode in jumpOpcodes:
             explored_nodes = set()
         elif node['id'] in explored_nodes:
@@ -223,20 +226,51 @@ def group_instructions(instruction_node_list):
 
 
 def main_render(stack, conn):
+    """Renders a trace in human-readable format."""
+
     for stack_entry in stack.trace:
         print(color_important + '#'*80)
         print(f'EVM is running code at {stack_entry.address}. Reason: {stack_entry.reason}')
         res = get_contract_from_db(stack_entry.address, conn)
 
         if res is None:
-            print("Source not found in db, skipping...")
+            print("Source not found in db, skipping...") # TODO Make sure not to confuse contracts with addresses
             continue
 
         code = res['code']
         contract_name = res['contract_name']
         bytecode = res['hex_bytecode']
         source_map = res['source_map']
-        ast, solidity_file = compile_solidity(**res)
+
+        stack_entry_folder = f"{stack.starting_transaction}/{stack_entry[0]}"
+        ast = solidity_file = None
+        
+        # Save compiler output as to not recompile each time
+        try:
+            ast_path = f"{stack_entry_folder}/ast.pkl"
+            solidity_file_path = f"{stack_entry_folder}/solidity_file.pkl"
+
+            if os.path.exists(stack_entry_folder):
+                with open(ast_path, "rb") as f:
+                    ast = pickle.load(f)
+                
+                with open(solidity_file_path, "rb") as f:
+                    solidity_file = pickle.load(f)
+            else:
+                ast, solidity_file = compile_solidity(**res)
+
+                os.makedirs(stack_entry_folder)
+
+                with open(ast_path,"wb") as f:
+                    pickle.dump(ast,f)
+                
+                with open(solidity_file_path,"wb") as f:
+                    pickle.dump(solidity_file,f)
+
+        except Exception as e:
+            print(e)
+            exit(1)
+
 
         if ast is None:
             print('AST is empty or using legacyAST, which is not supported.')
@@ -285,9 +319,9 @@ def main_render(stack, conn):
                     ast_node = search_ast(ast, fro, length, source_index)
 
                     if ast_node is None:
-                        raise Exception(f"Could not find ast node from source mapping: {fro} : {length} : {source_index}")
-
-                    instruction_node_list.append((opcode, ast_node))
+                        print(f"Could not find ast node from source mapping: {fro} : {length} : {source_index}")
+                    else:
+                        instruction_node_list.append((opcode, ast_node))
                         
 
             if 0x60 <= opcode < 0x80:
@@ -301,7 +335,7 @@ def main_render(stack, conn):
         for node in group_instructions(instruction_node_list):#remove_consecutives(instruction_node_list):
             if node['nodeType'] in validAstTypes:
                 node_f, node_r, node_l = map(int, node['src'].split(':'))
-                print(f"line {line_index[node_f] + 1}: {code[node_f - 1 : node_f + node_r].lstrip()} : node_id {node['id']} : {node['nodeType']}")
+                print(f"line {line_index[node_f] + 1}: {code[node_f - 1 : node_f + node_r].lstrip()} : node_id {node['id']} : {node['nodeType']}\n")
             elif node['nodeType'] in invalidAstTypes:
                 continue
             else:
@@ -310,7 +344,7 @@ def main_render(stack, conn):
 
         print('\n')
 
-
+# Execution start
 if __name__ == '__main__':
     try:
         # transaction = '0x0ec3f2488a93839524add10ea229e773f6bc891b4eb4794c3337d4495263790b'    # DAO Attack

@@ -9,6 +9,7 @@ class EVMExecuctionStack:
     StackEntry = namedtuple('StackEntry', ['address', 'reason', 'vmstate'])
     
     def __init__(self):
+        self.starting_transaction = ""
         self.stack = []
         self.trace = []
         self.instructions = defaultdict(set)
@@ -48,17 +49,20 @@ class EVMExecuctionStack:
         if not os.path.exists('traces'):
             os.makedirs('traces')
 
-        filename = 'traces/' + transaction + '.pkl'
+        if not os.path.exists(f"traces/{transaction}"):
+            os.makedirs(f"traces/{transaction}")
+
+        self.starting_transaction = f"traces/{transaction}"
         transaction_trace = None
 
         try:
-            if os.path.isfile(filename):
-                with open(filename,"rb") as f:
+            if os.path.isfile(f"{self.starting_transaction}/trace.pkl"):
+                with open(f"{self.starting_transaction}/trace.pkl","rb") as f:
                     transaction_trace = pickle.load(f)
             else:
                 transaction_trace = get_trace(transaction)['result']['structLogs']
 
-                with open(filename,"wb") as f:
+                with open(f"{self.starting_transaction}/trace.pkl","wb") as f:
                     pickle.dump(transaction_trace,f)
         except Exception as e:
             print(e)
