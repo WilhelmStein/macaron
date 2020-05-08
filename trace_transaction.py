@@ -131,17 +131,14 @@ def get_contract_from_db(a, conn):
         return row
 
 
-validAstTypes = ['ParameterList', 'ExpressionStatement', 'FunctionCall', 'VariableDeclarationStatement', 'ForStatement', 'IfStatement',
-                 'BinaryOperation', 'Return']
+validAstTypes = ['ParameterList', 'ExpressionStatement', 'FunctionCall', 'VariableDeclarationStatement', 'DoWhileStatement', 'WhileStatement', 'ForStatement', 'IfStatement',
+                  'Return']
 
-invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'VariableDeclaration', 'Identifier',
+invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'VariableDeclaration', 'Identifier', 'BinaryOperation',
                    'FunctionDefinition', 'Literal', 'MemberAccess', 'IndexAccess']
 
 
 def search_ast(ast, fro, length, source_index):
-
-    # if 'src' not in ast:
-    #     return None
 
     curr_node_s, curr_node_r, curr_node_m = map(int , ast['src'].split(':'))
 
@@ -150,11 +147,11 @@ def search_ast(ast, fro, length, source_index):
 
     # TODO Performance optimizations
 
-    ambiguous_size_element_types = ['parameters']
-    list_element_types = ['statements', 'nodes', 'arguments', 'declarations']
-    single_element_types = [ 'body', 'expression', 'leftHandSide', 'rightHandSide', 'leftExpression', 'rightExpression',
+    ambiguous_size_element_types = {'parameters'}
+    list_element_types = {'statements', 'nodes', 'arguments', 'declarations'}
+    single_element_types = { 'body', 'expression', 'leftHandSide', 'rightHandSide', 'leftExpression', 'rightExpression',
                              'initializationExpression', 'initialValue', 'expression', 'trueBody', 'falseBody', 'condition', 
-                             'baseExpression', 'indexExpression', 'loopExpression', 'returnParameters', 'subExpression']
+                             'baseExpression', 'indexExpression', 'loopExpression', 'returnParameters', 'subExpression'}
 
     nodes = []
 
@@ -181,25 +178,48 @@ def search_ast(ast, fro, length, source_index):
         # if node_s < fro or node_s >= fro + length:
         #     continue
 
-
         returned_node = search_ast(node, fro, length, source_index)
 
         if returned_node is None:
             continue
-        else:
-            return returned_node
+
+        return returned_node
 
     return None
 
+def remove_consecutives(node_list):
+    prevNode = None
+    output_list = []
 
-def remove_consecutives(input_list):
-    prevElem = None
-    for elem in input_list:
-        if prevElem == elem:
+    for node in node_list:
+        if prevNode == node:
+            continue
+        prevNode = node
+        output_list.append(node)
+    
+    return output_list
+
+
+def group_instructions(instruction_node_list):
+    
+    explored_nodes = set() #defaultdict(int)
+    grouped_node_list = []
+
+    jumpOpcodes = {0x56, 0x57}
+
+    for (opcode, node) in instruction_node_list:
+
+        
+        if opcode in jumpOpcodes:
+            explored_nodes = set()
+        elif node['id'] in explored_nodes:
             continue
         else:
-            prevElem = elem
-            yield elem 
+            explored_nodes.add(node['id'])
+            grouped_node_list.append(node)
+
+    return remove_consecutives(grouped_node_list)
+
 
 
 def main_render(stack, conn):
@@ -241,10 +261,13 @@ def main_render(stack, conn):
         #     print(f'Warning: Deployed bytecode is length {len(bytecode)}, but compiled bytecode is length {len(object)}')
 
         pc = 0
-        ast_list = []
+        instruction_node_list = []
         for s in source_map.split(';'):
 
             # Filter out all instructions that were not part of the trace
+
+            opcode = int(object[pc * 2] + object[pc * 2 + 1], 16)
+
             if pc in stack.instructions[stack_entry]:
                 if s:
                     s_split = s.split(':')
@@ -262,16 +285,10 @@ def main_render(stack, conn):
                     ast_node = search_ast(ast, fro, length, source_index)
 
                     if ast_node is None:
-                        raise Exception(f"Could not find ast node from source mapping: {fro} : {length} : {source_index}")  
-                    elif ast_node:
-                        if ast_node['nodeType'] in validAstTypes: 
-                            ast_list.append(ast_node)
-                        elif ast_node['nodeType'] in invalidAstTypes:
-                            pass
-                        else:
-                            print(f"Warning: Unknown AST Node type: {ast_node['nodeType']} encountered during AST search.")
+                        raise Exception(f"Could not find ast node from source mapping: {fro} : {length} : {source_index}")
 
-            opcode = int(object[pc * 2] + object[pc * 2 + 1], 16)
+                    instruction_node_list.append((opcode, ast_node))
+                        
 
             if 0x60 <= opcode < 0x80:
                 # it's a push instruction, increment by extra size of instruction
@@ -280,11 +297,17 @@ def main_render(stack, conn):
 
         line_index = char_to_line(code)
 
-
         print('Displaying trace:')
-        for ast_node in ast_list:#remove_consecutives(ast_list):
-            node_f, node_r, node_l = map(int, ast_node['src'].split(':'))
-            print(f'line {line_index[node_f] + 1}: {code[node_f - 1 : node_f + node_r].lstrip()}')
+        for node in group_instructions(instruction_node_list):#remove_consecutives(instruction_node_list):
+            if node['nodeType'] in validAstTypes:
+                node_f, node_r, node_l = map(int, node['src'].split(':'))
+                print(f"line {line_index[node_f] + 1}: {code[node_f - 1 : node_f + node_r].lstrip()} : node_id {node['id']} : {node['nodeType']}")
+            elif node['nodeType'] in invalidAstTypes:
+                continue
+            else:
+                print(f"Warning: Unknown AST Node type: {node['nodeType']} encountered during AST search.")
+
+
         print('\n')
 
 
