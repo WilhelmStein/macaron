@@ -6,10 +6,9 @@ import pandas as pd
 import dill
 import solcx
 import solcx.install
-from collections import defaultdict
+from collections import defaultdict, OrderedDict, Mapping
 from itertools import chain
 import evm_stack
-import collections
 import os.path
 import pickle
 
@@ -72,14 +71,18 @@ def make_compiler_json(filename, optimization_enabled = False, optimization_runs
     }
 
 
-def char_to_line(source):
+def create_source_index(source):
     line = 0
-    res = {}
+    line_index = {}
+    char_index = defaultdict(list)
+
     for i, s in enumerate(source):
-        res[i] = line
+        line_index[i] = line
+        char_index[line].append(i)
+
         if s == LINE_SPLIT_DELIMETER:
             line +=1
-    return res
+    return (line_index, char_index)
 
 
 def process_compiler_version(compiler):
@@ -170,7 +173,7 @@ def search_ast(ast, fro, length, source_index):
 
     for element_type in ambiguous_size_element_types:
         if element_type in ast:
-            if isinstance(ast[element_type], collections.Mapping):
+            if isinstance(ast[element_type], Mapping):
                 nodes.append(ast[element_type])
             else:
                 nodes += ast[element_type]
@@ -209,7 +212,7 @@ def group_instructions(instruction_node_list):
     explored_nodes = set()
     grouped_node_list = []
 
-    jumpOpcodes = {0x5B}
+    jumpOpcodes = {0x5B} # 0x56 JUMP, 0x57 JUMPI, 0x5B JUMPDEST
 
     for (opcode, node) in instruction_node_list:
 
@@ -329,13 +332,27 @@ def main_render(stack, conn):
                 pc += (opcode - 0x5f)
             pc += 1
 
-        line_index = char_to_line(code)
+        line_index, char_index = create_source_index(code)
 
         print('Displaying trace:')
         for node in group_instructions(instruction_node_list):#remove_consecutives(instruction_node_list):
             if node['nodeType'] in validAstTypes:
                 node_f, node_r, node_l = map(int, node['src'].split(':'))
-                print(f"line {line_index[node_f] + 1}: {code[node_f - 1 : node_f + node_r].lstrip()} : node_id {node['id']} : {node['nodeType']}\n")
+
+                line_set = OrderedDict()
+                for c in range(node_f, node_f + node_r + 1):
+                    line_set[line_index[c]] = True
+                
+                char_list = []
+                for line in line_set:
+                    char_list += char_index[line]
+                
+                source_display = ""
+                for char in char_list:
+                    source_display += code[char]
+                    
+
+                print(f"line {line_index[node_f] + 1}: {source_display.lstrip()} : node_id {node['id']} : {node['nodeType']}\n")
             elif node['nodeType'] in invalidAstTypes:
                 continue
             else:
