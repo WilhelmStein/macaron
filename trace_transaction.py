@@ -16,7 +16,7 @@ import pickle
 # Globals
 LINE_SPLIT_DELIMETER = '\n'
 
-color_important = '\033[36m\033[40m'
+color_important = '\033[31m\033[40m'
 
 query_decompiled = """
   select d.source_level, d.debug
@@ -211,19 +211,30 @@ def group_instructions(instruction_node_list):
     
     explored_nodes = set()
     grouped_node_list = []
+    set_stack = []
 
-    jumpOpcodes = {0x5B} # 0x56 JUMP, 0x57 JUMPI, 0x5B JUMPDEST
+    # 0x56 JUMP, 0x57 JUMPI, 0x5B JUMPDEST
+    repeatingNodes = {'WhileStatement', 'DoWhileStatement', 'ForStatement'}
+    encounteredBranch = False
+    opcodes = {'JUMP': 0x56, 'JUMPI': 0x57, 'JUMPDEST': 0x5B}
 
-    for (opcode, node) in instruction_node_list:
+    for idx, (opcode, node) in enumerate(instruction_node_list):
+        # TODO Optimize
 
-        if opcode in jumpOpcodes:
-            explored_nodes = set()
-        elif node['id'] in explored_nodes:
-            continue
-        else:
+        if node['id'] not in explored_nodes:
+            if node['nodeType'] in repeatingNodes:
+                set_stack.append(explored_nodes)
+                explored_nodes = set()
+                curr_id = node['id']
+
             explored_nodes.add(node['id'])
-            grouped_node_list.append(node)
-
+            grouped_node_list.append((opcode, node))
+        
+        else:
+            if node['nodeType'] in repeatingNodes and node['id'] == curr_id:
+                if opcode == opcodes['JUMP'] or opcode == opcodes['JUMPDEST'] and instruction_node_list[idx - 1][0]:
+                    explored_nodes = set_stack.pop()
+        
     return grouped_node_list
 
 
@@ -335,7 +346,7 @@ def main_render(stack, conn):
         line_index, char_index = create_source_index(code)
 
         print('Displaying trace:')
-        for node in group_instructions(instruction_node_list):#remove_consecutives(instruction_node_list):
+        for opcode, node in group_instructions(instruction_node_list):#remove_consecutives(instruction_node_list):
             if node['nodeType'] in validAstTypes:
                 node_f, node_r, node_l = map(int, node['src'].split(':'))
 
@@ -352,7 +363,7 @@ def main_render(stack, conn):
                     source_display += code[char]
                     
 
-                print(f"line {line_index[node_f] + 1}: {source_display.lstrip()} : node_id {node['id']} : {node['nodeType']}\n")
+                print(f"line {line_index[node_f] + 1}: {source_display.lstrip()} : node_id {node['id']} : {node['nodeType']} : OP {hex(opcode)}\n")
             elif node['nodeType'] in invalidAstTypes:
                 continue
             else:
