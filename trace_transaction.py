@@ -36,11 +36,15 @@ query_source = """
 """
 
 
-validAstTypes = ['ParameterList', 'ExpressionStatement', 'VariableDeclarationStatement', 'DoWhileStatement', 'WhileStatement', 'ForStatement', 'IfStatement',
+validAstTypes = ['ParameterList', 'ExpressionStatement', 'VariableDeclaration', 'VariableDeclarationStatement', 'DoWhileStatement', 'WhileStatement', 'ForStatement', 'IfStatement',
                   'Return']
 
-invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'VariableDeclaration', 'Identifier', 'BinaryOperation',
+invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'Identifier', 'BinaryOperation',
                    'FunctionDefinition', 'Literal', 'MemberAccess', 'IndexAccess', 'FunctionCall']
+
+# Debug
+# validAstTypes += invalidAstTypes
+# invalidAstTypes = []
 
 
 # Function Definitions
@@ -214,26 +218,42 @@ def group_instructions(instruction_node_list):
     set_stack = []
 
     # 0x56 JUMP, 0x57 JUMPI, 0x5B JUMPDEST
-    repeatingNodes = {'WhileStatement', 'DoWhileStatement', 'ForStatement'}
-    encounteredBranch = False
+    repeatingNodes = {'WhileStatement', 'DoWhileStatement', 'ForStatement', 'FunctionCall'}
     opcodes = {'JUMP': 0x56, 'JUMPI': 0x57, 'JUMPDEST': 0x5B}
+    curr_id = instruction_node_list[0][1]['id']
 
     for idx, (opcode, node) in enumerate(instruction_node_list):
         # TODO Optimize
+        # Fine grain method
+        # if node['id'] not in explored_nodes:
+        #     if node['nodeType'] in repeatingNodes:
+        #         set_stack.append(explored_nodes)
+        #         explored_nodes = set()
+        #         curr_id = node['id']
 
-        if node['id'] not in explored_nodes:
-            if node['nodeType'] in repeatingNodes:
-                set_stack.append(explored_nodes)
-                explored_nodes = set()
-                curr_id = node['id']
-
-            explored_nodes.add(node['id'])
-            grouped_node_list.append((opcode, node))
+        #     explored_nodes.add(node['id'])
+        #     grouped_node_list.append((opcode, node))
         
-        else:
-            if node['nodeType'] in repeatingNodes and node['id'] == curr_id:
-                if opcode == opcodes['JUMP'] or opcode == opcodes['JUMPDEST'] and instruction_node_list[idx - 1][0]:
-                    explored_nodes = set_stack.pop()
+        # else:
+        #     if node['id'] == curr_id:
+        #         if node['nodeType'] in {'ForStatement', 'DoWhileStatement', 'WhileStatement'}:
+        #             if opcode == opcodes['JUMP'] or opcode == opcodes['JUMPDEST'] and instruction_node_list[idx - 1][0] == opcodes['JUMPI']:
+        #                 explored_nodes = set_stack.pop()
+                
+        #         elif node['nodeType'] == "FunctionCall" or 'expression' in node and node['expression']['nodeType'] == "FunctionCall":
+        #             if opcode == opcodes['JUMP']:
+        #                 explored_nodes = set_stack.pop()
+        
+        # Coarse grain method
+        if node['id'] not in explored_nodes:
+            if opcode == opcodes['JUMPI']:# or opcode == opcodes['JUMP']:
+                explored_nodes = set()
+
+            if opcode != opcodes['JUMPDEST'] or node['nodeType'] != 'FunctionCall':
+                grouped_node_list.append((opcode, node))
+                explored_nodes.add(node['id'])
+            
+        # grouped_node_list.append((opcode, node))
         
     return grouped_node_list
 
@@ -361,6 +381,8 @@ def main_render(stack, conn):
                 source_display = ""
                 for char in char_list:
                     source_display += code[char]
+
+                # source_display = code[node_f : node_f + node_r] # Debug
                     
 
                 print(f"line {line_index[node_f] + 1}: {source_display.lstrip()} : node_id {node['id']} : {node['nodeType']} : OP {hex(opcode)}\n")
@@ -378,14 +400,14 @@ if __name__ == '__main__':
         # transaction = '0x0ec3f2488a93839524add10ea229e773f6bc891b4eb4794c3337d4495263790b'    # DAO Attack
         # transaction = '0x863df6bfa4469f3ead0be8f9f2aae51c91a907b4'                            # Parity Attack
         # transaction = '0xd6c24da4e17aa18db03f9df46f74f119fa5c2314cb1149cd3f88881ddc475c5a'    # DAOSTACK Attack - Self Destructed :(
-        transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack
+        # transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack
 
         # transaction = '0xa2f866c2b391c9d35d8f18edb006c9a872c0014b992e4b586cc2f11dc2b24ebd' # test1
         # transaction = '0xc1f534b03e5d4840c091c54224c3381b892b8f1a2869045f49913f3cfaf95ba7' # Million Money
         # transaction = '0xa537c0ae6172fc43ddadd0f94d2821ae278fae4ba8147ea7fa882fa9b0a6a51a' # Greed Pit
         # transaction = '0x51f37d7b41e6864d1190d8f596e956501d9f4e0f8c598dbcbbc058c10b25aa3b' # Dust
         # transaction = '0x3f0a309ebbc5642ec18047fb902c383b33e951193bda6402618652e9234c9abb' # Tokens
-        # transaction = '0x6aec28ad65052132bf04c0ed621e24c007b2476fe6810389232d3ac4222c0ccc' # Doubleway
+        transaction = '0x6aec28ad65052132bf04c0ed621e24c007b2476fe6810389232d3ac4222c0ccc' # Doubleway
         # transaction = '0xa228e903a5d751e4268a602bd6b938392272e4024e2071f7cd4a479e8125c370' # Saturn Network 2
 
         conn = pymysql.connect(
