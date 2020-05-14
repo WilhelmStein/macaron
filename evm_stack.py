@@ -70,7 +70,8 @@ class EVMExecuctionStack:
 
 
         prev_depth = 0
-        for t in transaction_trace:
+
+        for idx, t in enumerate(transaction_trace):
             if t['depth'] < prev_depth:
                 self.ret()
 
@@ -80,8 +81,10 @@ class EVMExecuctionStack:
             self.instructions[current_stack_entry].add(pc)
             self.instructions_order[current_stack_entry][pc] = min(self.instructions_order[current_stack_entry][pc], self.order)
             self.order += 1
-            if t['op'] in self.calls:
+
+            if t['op'] in self.calls and transaction_trace[idx + 1]['depth'] != prev_depth:
                 # take next address from the stack, cast to 160-bits
                 self.call(t['stack'][-2][-40:], t['op'])
+                
             prev_depth = t['depth']
         

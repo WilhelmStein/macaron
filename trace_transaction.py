@@ -37,10 +37,14 @@ query_source = """
 
 
 validAstTypes = ['ParameterList', 'ExpressionStatement', 'VariableDeclaration', 'VariableDeclarationStatement', 'DoWhileStatement', 'WhileStatement', 'ForStatement', 'IfStatement',
-                  'Return']
+                  'Return', 'Assignment']
 
 invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'Identifier', 'BinaryOperation',
                    'FunctionDefinition', 'Literal', 'MemberAccess', 'IndexAccess', 'FunctionCall']
+
+node_children_names = { 'parameters', 'statements', 'nodes', 'arguments', 'declarations', 'body', 'expression', 'leftHandSide', 'rightHandSide', 
+                        'leftExpression', 'rightExpression', 'initializationExpression', 'initialValue', 'expression', 'trueBody', 'falseBody', 
+                        'condition', 'baseExpression', 'indexExpression', 'loopExpression', 'returnParameters', 'subExpression', 'eventCall', 'components' }
 
 # Debug
 # validAstTypes += invalidAstTypes
@@ -145,46 +149,40 @@ def get_contract_from_db(a, conn):
         return row
 
 
+def valid_source(ast, fro, length, source_index):
+    ast_fro, ast_length, ast_source_index = map(int, ast['src'].split(':'))
+
+    return ( fro >= ast_fro and fro + length <= ast_fro + ast_length and ast_source_index == source_index )
+
+
 def search_ast(ast, fro, length, source_index):
     """Recursive function that searches a given AST for a node with a specific source mapping."""
-
+    
     if ast is None:
         raise Exception(f"Node is None. Searching for {fro} : {length} : {source_index}")
 
     curr_node_s, curr_node_r, curr_node_m = map(int , ast['src'].split(':'))
-    
-    
+    output_node = None
+
     if fro == curr_node_s and length == curr_node_r and curr_node_m == source_index:
-        return ast
+        output_node = ast
     elif curr_node_s + curr_node_r < fro or curr_node_s > fro + length: # A small optimization, as to avoid a full dfs of the ast
         return None
-        
-
-    ambiguous_size_element_types = {'parameters'}
-    list_element_types = {'statements', 'nodes', 'arguments', 'declarations'}
-    single_element_types = { 'body', 'expression', 'leftHandSide', 'rightHandSide', 'leftExpression', 'rightExpression',
-                             'initializationExpression', 'initialValue', 'expression', 'trueBody', 'falseBody', 'condition', 
-                             'baseExpression', 'indexExpression', 'loopExpression', 'returnParameters', 'subExpression', 'eventCall'}
 
     nodes = []
 
-    for element_type in single_element_types:
-        if element_type in ast and ast[element_type]:
-            nodes.append(ast[element_type])
-
-    for element_type in list_element_types:
-        nodes += ast[element_type] if element_type in ast and ast[element_type] else []
-
-    for element_type in ambiguous_size_element_types:
-        if element_type in ast:
-            if isinstance(ast[element_type], Mapping):
-                nodes.append(ast[element_type])
+    for name in node_children_names:
+        if name in ast and ast[name]:
+            if isinstance(ast[name], Mapping):
+                nodes.append(ast[name])
             else:
-                nodes += ast[element_type]
+                nodes += ast[name] # Lists can contain None Elements (for some inexplicable reason!)
             
-
     
     for node in nodes:
+        if node is None:
+            continue
+
         returned_node = search_ast(node, fro, length, source_index)
 
         if returned_node is None:
@@ -192,7 +190,7 @@ def search_ast(ast, fro, length, source_index):
 
         return returned_node
 
-    return None
+    return output_node
 
 
 def remove_consecutives(node_list):
@@ -253,7 +251,7 @@ def group_instructions(instruction_node_list):
                 grouped_node_list.append((opcode, node))
                 explored_nodes.add(node['id'])
             
-        # grouped_node_list.append((opcode, node))
+        # grouped_node_list.append((opcode, node)) # Debug
         
     return grouped_node_list
 
@@ -268,7 +266,7 @@ def main_render(stack, conn):
         res = get_contract_from_db(stack_entry.address, conn)
 
         if res is None:
-            print("Source not found in db, skipping...") # TODO Make sure not to confuse contracts with addresses
+            print("Source not found in db, skipping...")
             continue
 
         code = res['code']
@@ -349,10 +347,10 @@ def main_render(stack, conn):
                         source_index = int(s_split[2])
                     
                 
-                if source_index != -1:
+                if valid_source(ast, fro, length, source_index):
                     ast_node = search_ast(ast, fro, length, source_index)
 
-                    if ast_node is None:
+                    if ast_node is None: # TODO Investigate invalid inner ranges
                         print(f"Could not find ast node from source mapping: {fro} : {length} : {source_index}")
                     else:
                         instruction_node_list.append((opcode, ast_node))
@@ -400,14 +398,14 @@ if __name__ == '__main__':
         # transaction = '0x0ec3f2488a93839524add10ea229e773f6bc891b4eb4794c3337d4495263790b'    # DAO Attack
         # transaction = '0x863df6bfa4469f3ead0be8f9f2aae51c91a907b4'                            # Parity Attack
         # transaction = '0xd6c24da4e17aa18db03f9df46f74f119fa5c2314cb1149cd3f88881ddc475c5a'    # DAOSTACK Attack - Self Destructed :(
-        # transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack
+        transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack
 
         # transaction = '0xa2f866c2b391c9d35d8f18edb006c9a872c0014b992e4b586cc2f11dc2b24ebd' # test1
         # transaction = '0xc1f534b03e5d4840c091c54224c3381b892b8f1a2869045f49913f3cfaf95ba7' # Million Money
         # transaction = '0xa537c0ae6172fc43ddadd0f94d2821ae278fae4ba8147ea7fa882fa9b0a6a51a' # Greed Pit
         # transaction = '0x51f37d7b41e6864d1190d8f596e956501d9f4e0f8c598dbcbbc058c10b25aa3b' # Dust
         # transaction = '0x3f0a309ebbc5642ec18047fb902c383b33e951193bda6402618652e9234c9abb' # Tokens
-        transaction = '0x6aec28ad65052132bf04c0ed621e24c007b2476fe6810389232d3ac4222c0ccc' # Doubleway
+        # transaction = '0x6aec28ad65052132bf04c0ed621e24c007b2476fe6810389232d3ac4222c0ccc' # Doubleway
         # transaction = '0xa228e903a5d751e4268a602bd6b938392272e4024e2071f7cd4a479e8125c370' # Saturn Network 2
 
         conn = pymysql.connect(
