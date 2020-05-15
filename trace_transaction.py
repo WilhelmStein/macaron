@@ -6,7 +6,7 @@ import pandas as pd
 import dill
 import solcx
 import solcx.install
-from collections import defaultdict, OrderedDict, Mapping
+from collections import defaultdict, OrderedDict, Mapping, namedtuple
 from itertools import chain
 import evm_stack
 import os.path
@@ -16,7 +16,9 @@ import pickle
 # Globals
 LINE_SPLIT_DELIMETER = '\n'
 
-color_important = '\033[31m\033[40m'
+color_normal = '\033[31m\033[40m'
+color_highlight = '\033[30m\033[107m'
+
 
 query_decompiled = """
   select d.source_level, d.debug
@@ -37,18 +39,20 @@ query_source = """
 
 
 validAstTypes = ['ParameterList', 'ExpressionStatement', 'VariableDeclaration', 'VariableDeclarationStatement', 'DoWhileStatement', 'WhileStatement', 'ForStatement', 'IfStatement',
-                  'Return', 'Assignment']
+                  'Return', 'Assignment', 'PlaceholderStatement']
 
 invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'Identifier', 'BinaryOperation',
-                   'FunctionDefinition', 'Literal', 'MemberAccess', 'IndexAccess', 'FunctionCall']
+                   'FunctionDefinition', 'Literal', 'MemberAccess', 'IndexAccess', 'FunctionCall', 'UnaryOperation']
 
 node_children_names = { 'parameters', 'statements', 'nodes', 'arguments', 'declarations', 'body', 'expression', 'leftHandSide', 'rightHandSide', 
                         'leftExpression', 'rightExpression', 'initializationExpression', 'initialValue', 'expression', 'trueBody', 'falseBody', 
                         'condition', 'baseExpression', 'indexExpression', 'loopExpression', 'returnParameters', 'subExpression', 'eventCall', 'components' }
 
 # Debug
-# validAstTypes += invalidAstTypes
-# invalidAstTypes = []
+validAstTypes += invalidAstTypes
+invalidAstTypes = []
+
+NodeWrapper = namedtuple('NodeWrapper', ['node', 'lineage'])
 
 
 # Function Definitions
@@ -155,20 +159,8 @@ def valid_source(ast, fro, length, source_index):
     return ( fro >= ast_fro and fro + length <= ast_fro + ast_length and ast_source_index == source_index )
 
 
-def search_ast(ast, fro, length, source_index):
-    """Recursive function that searches a given AST for a node with a specific source mapping."""
-    
-    if ast is None:
-        raise Exception(f"Node is None. Searching for {fro} : {length} : {source_index}")
-
-    curr_node_s, curr_node_r, curr_node_m = map(int , ast['src'].split(':'))
-    output_node = None
-
-    if fro == curr_node_s and length == curr_node_r and curr_node_m == source_index:
-        output_node = ast
-    elif curr_node_s + curr_node_r < fro or curr_node_s > fro + length: # A small optimization, as to avoid a full dfs of the ast
-        return None
-
+def list_children(ast):
+    """Utility function that, given an ast node, returns its children in list form."""
     nodes = []
 
     for name in node_children_names:
@@ -177,18 +169,39 @@ def search_ast(ast, fro, length, source_index):
                 nodes.append(ast[name])
             else:
                 nodes += ast[name] # Lists can contain None Elements (for some inexplicable reason!)
+    
+    return nodes
+
+
+def search_ast(wrapper, fro, length, source_index):
+    """Recursive function that searches a given AST for a node with a specific source mapping."""
+    
+    ast, lineage = wrapper
+
+    if ast is None:
+        raise Exception(f"Node is None. Searching for {fro} : {length} : {source_index}")
+
+    curr_node_s, curr_node_r, curr_node_m = map(int , ast['src'].split(':'))
+    output_node = None
+
+    if fro == curr_node_s and length == curr_node_r and curr_node_m == source_index:
+        output_node = (ast, lineage)
+    elif curr_node_s + curr_node_r < fro or curr_node_s > fro + length: # A small optimization, as to avoid a full dfs of the ast
+        return None
+
+    nodes = list_children(ast)
             
     
     for node in nodes:
         if node is None:
             continue
 
-        returned_node = search_ast(node, fro, length, source_index)
+        returned_node = search_ast((node, [ast] + lineage), fro, length, source_index)
 
         if returned_node is None:
             continue
 
-        return returned_node
+        output_node = returned_node
 
     return output_node
 
@@ -211,16 +224,18 @@ def remove_consecutives(node_list):
 def group_instructions(instruction_node_list):
     """Try to group bytecode instructions that correspond to the same solidity instruction"""
     
-    explored_nodes = set()
-    grouped_node_list = []
-    set_stack = []
+    # explored_nodes = set()
+    output_list = []
+    grouped_nodes = {}
+    # set_stack = []
+    scope = None
 
     # 0x56 JUMP, 0x57 JUMPI, 0x5B JUMPDEST
-    repeatingNodes = {'WhileStatement', 'DoWhileStatement', 'ForStatement', 'FunctionCall'}
+    # repeatingNodes = {'WhileStatement', 'DoWhileStatement', 'ForStatement', 'FunctionCall'}
     opcodes = {'JUMP': 0x56, 'JUMPI': 0x57, 'JUMPDEST': 0x5B}
-    curr_id = instruction_node_list[0][1]['id']
-
-    for idx, (opcode, node) in enumerate(instruction_node_list):
+    # curr_id = instruction_node_list[0][1]['id']
+    
+    for idx, (opcode, node_wrapper) in enumerate(instruction_node_list):
         # TODO Optimize
         # Fine grain method
         # if node['id'] not in explored_nodes:
@@ -243,17 +258,52 @@ def group_instructions(instruction_node_list):
         #                 explored_nodes = set_stack.pop()
         
         # Coarse grain method
-        if node['id'] not in explored_nodes:
-            if opcode == opcodes['JUMPI']:# or opcode == opcodes['JUMP']:
-                explored_nodes = set()
+        # if node['id'] not in explored_nodes:
+        #     if opcode == opcodes['JUMPI']:# or opcode == opcodes['JUMP']:
+        #         explored_nodes = set()
 
-            if opcode != opcodes['JUMPDEST'] or node['nodeType'] != 'FunctionCall':
-                grouped_node_list.append((opcode, node))
-                explored_nodes.add(node['id'])
-            
-        # grouped_node_list.append((opcode, node)) # Debug
+        #     if opcode != opcodes['JUMPDEST'] or node['nodeType'] != 'FunctionCall':
+        #         output_list.append((opcode, node))
+        #         explored_nodes.add(node['id'])
+
+        # Bottom-Up method
+        node, lineage = node_wrapper
+
+        for ancestor in lineage:
+            if ancestor['nodeType'] in {'ModifierDefinition', 'FunctionDefinition'}:
+                scope = ancestor['src']
+                break
+
+
+        if not scope:
+            continue
+        elif opcode == opcodes['JUMPI'] or opcode == opcodes['JUMP']:
+            output_list.append((scope, grouped_nodes))
+            grouped_nodes = {}
+
+        grouped_nodes[node['id']] = node
+
+        # output_list.append((opcode, node)) # Debug
         
-    return grouped_node_list
+    return output_list
+
+
+def highlight_node(node, node_set):
+    children = list_children(node)
+
+    if node['id'] not in node_set:
+        return False
+
+    if not children:
+        return True
+
+    for child in children:
+        if highlight_node(child, node_set):
+            continue
+
+        return False
+    
+    return True
 
 
 
@@ -261,7 +311,7 @@ def main_render(stack, conn):
     """Renders a trace in human-readable format."""
 
     for stack_entry in stack.trace:
-        print(color_important + '#'*80)
+        print(f"{color_normal}{'#'*80}")
         print(f'EVM is running code at {stack_entry.address}. Reason: {stack_entry.reason}')
         res = get_contract_from_db(stack_entry.address, conn)
 
@@ -348,12 +398,12 @@ def main_render(stack, conn):
                     
                 
                 if valid_source(ast, fro, length, source_index):
-                    ast_node = search_ast(ast, fro, length, source_index)
+                    ast_node = search_ast((ast, []), fro, length, source_index)
 
                     if ast_node is None: # TODO Investigate invalid inner ranges
                         print(f"Could not find ast node from source mapping: {fro} : {length} : {source_index}")
                     else:
-                        instruction_node_list.append((opcode, ast_node))
+                        instruction_node_list.append( (stack.instructions_order[stack_entry][pc], opcode, ast_node) )
                         
 
             if 0x60 <= opcode < 0x80:
@@ -361,36 +411,71 @@ def main_render(stack, conn):
                 pc += (opcode - 0x5f)
             pc += 1
 
+        # Sort the list and clip the node ordering
+        instruction_node_list = list(map(lambda a: (a[1], a[2]), sorted(instruction_node_list, key = lambda a: a[0])))
+
         line_index, char_index = create_source_index(code)
+        
+        step_counter = 0
+        print('Displaying execution steps:')
+        for scope, node_set in group_instructions(instruction_node_list):#remove_consecutives(instruction_node_list):
+            # if node['nodeType'] in validAstTypes:
+            #     node_f, node_r, node_l = map(int, node['src'].split(':'))
 
-        print('Displaying trace:')
-        for opcode, node in group_instructions(instruction_node_list):#remove_consecutives(instruction_node_list):
-            if node['nodeType'] in validAstTypes:
-                node_f, node_r, node_l = map(int, node['src'].split(':'))
-
-                line_set = OrderedDict()
-                for c in range(node_f, node_f + node_r + 1):
-                    line_set[line_index[c]] = True
+            #     line_set = OrderedDict()
+            #     for c in range(node_f, node_f + node_r):
+            #         line_set[line_index[c]] = True
                 
-                char_list = []
-                for line in line_set:
-                    char_list += char_index[line]
+            #     char_list = []
+            #     for line in line_set:
+            #         char_list += char_index[line]
                 
-                source_display = ""
-                for char in char_list:
-                    source_display += code[char]
+            #     source_display = ""
+            #     for char in char_list:
+            #         source_display += code[char]
 
-                # source_display = code[node_f : node_f + node_r] # Debug
+            #     source_display = code[node_f : node_f + node_r] # Debug
                     
 
-                print(f"line {line_index[node_f] + 1}: {source_display.lstrip()} : node_id {node['id']} : {node['nodeType']} : OP {hex(opcode)}\n")
-            elif node['nodeType'] in invalidAstTypes:
-                continue
-            else:
-                print(f"Warning: Unknown AST Node type: {node['nodeType']} encountered during AST search.")
+            #     print(f"line {line_index[node_f] + 1}: {source_display.lstrip()} : node_id {node['id']} : {node['nodeType']} : OP {hex(opcode)}\n")
+            # elif node['nodeType'] in invalidAstTypes:
+            #     continue
+            # else:
+            #     print(f"Warning: Unknown AST Node type: {node['nodeType']} encountered during AST search.")
+
+            scope_f, scope_r, scope_l = map(int, scope.split(':'))
+            highlighted_nodes = set()
+            highlighted_indices = set()
+            
+
+            for node_id, node in node_set.items(): # If all children are highlighted, then highlight the parents too
+                if node_id not in highlighted_nodes and highlight_node(node, node_set):
+                    highlighted_nodes.add(node_id)
+                    node_f, node_r, node_l = map(int, node['src'].split(':'))
+                    highlighted_indices.update(range(node_f, node_f + node_r + 1))
+            
+            source_display = ""
+
+            curr_color = color_normal
+            for i in range(scope_f, scope_f + scope_r): # TODO Check if range is correct
+                if i in highlighted_indices:
+                    if curr_color == color_normal:    
+                        curr_color = color_highlight
+                        source_display += curr_color
+                    
+                else:
+                    if curr_color == color_highlight:
+                        curr_color = color_normal
+                        source_display += curr_color
 
 
-        print('\n')
+                source_display += code[i]
+            
+            print(f"step {step_counter}:\nline: {line_index[scope_f] + 1} : {source_display}{color_normal}\n")
+            step_counter += 1
+            
+
+        print(f"{color_normal}\n\n")
 
 # Execution start
 if __name__ == '__main__':
@@ -398,14 +483,14 @@ if __name__ == '__main__':
         # transaction = '0x0ec3f2488a93839524add10ea229e773f6bc891b4eb4794c3337d4495263790b'    # DAO Attack
         # transaction = '0x863df6bfa4469f3ead0be8f9f2aae51c91a907b4'                            # Parity Attack
         # transaction = '0xd6c24da4e17aa18db03f9df46f74f119fa5c2314cb1149cd3f88881ddc475c5a'    # DAOSTACK Attack - Self Destructed :(
-        transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack
+        # transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack
 
         # transaction = '0xa2f866c2b391c9d35d8f18edb006c9a872c0014b992e4b586cc2f11dc2b24ebd' # test1
         # transaction = '0xc1f534b03e5d4840c091c54224c3381b892b8f1a2869045f49913f3cfaf95ba7' # Million Money
         # transaction = '0xa537c0ae6172fc43ddadd0f94d2821ae278fae4ba8147ea7fa882fa9b0a6a51a' # Greed Pit
         # transaction = '0x51f37d7b41e6864d1190d8f596e956501d9f4e0f8c598dbcbbc058c10b25aa3b' # Dust
         # transaction = '0x3f0a309ebbc5642ec18047fb902c383b33e951193bda6402618652e9234c9abb' # Tokens
-        # transaction = '0x6aec28ad65052132bf04c0ed621e24c007b2476fe6810389232d3ac4222c0ccc' # Doubleway
+        transaction = '0x6aec28ad65052132bf04c0ed621e24c007b2476fe6810389232d3ac4222c0ccc' # Doubleway
         # transaction = '0xa228e903a5d751e4268a602bd6b938392272e4024e2071f7cd4a479e8125c370' # Saturn Network 2
 
         conn = pymysql.connect(
