@@ -11,6 +11,7 @@ from itertools import chain
 import evm_stack
 import os.path
 import pickle
+import functools
 
 
 # Globals
@@ -38,19 +39,19 @@ query_source = """
 """
 
 
-validAstTypes = ['ParameterList', 'ExpressionStatement', 'VariableDeclaration', 'VariableDeclarationStatement', 'DoWhileStatement', 'WhileStatement', 'ForStatement', 'IfStatement',
-                  'Return', 'Assignment', 'PlaceholderStatement']
+# validAstTypes = ['ParameterList', 'ExpressionStatement', 'VariableDeclaration', 'VariableDeclarationStatement', 'DoWhileStatement', 'WhileStatement', 'ForStatement', 'IfStatement',
+#                   'Return', 'Assignment', 'PlaceholderStatement']
 
-invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'Identifier', 'BinaryOperation',
-                   'FunctionDefinition', 'Literal', 'MemberAccess', 'IndexAccess', 'FunctionCall', 'UnaryOperation']
+# invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'Identifier', 'BinaryOperation',
+#                    'FunctionDefinition', 'Literal', 'MemberAccess', 'IndexAccess', 'FunctionCall', 'UnaryOperation']
 
 node_children_names = { 'parameters', 'statements', 'nodes', 'arguments', 'declarations', 'body', 'expression', 'leftHandSide', 'rightHandSide', 
                         'leftExpression', 'rightExpression', 'initializationExpression', 'initialValue', 'expression', 'trueBody', 'falseBody', 
                         'condition', 'baseExpression', 'indexExpression', 'loopExpression', 'returnParameters', 'subExpression', 'eventCall', 'components' }
 
 # Debug
-validAstTypes += invalidAstTypes
-invalidAstTypes = []
+# validAstTypes += invalidAstTypes
+# invalidAstTypes = []
 
 NodeWrapper = namedtuple('NodeWrapper', ['node', 'lineage'])
 
@@ -288,22 +289,50 @@ def group_instructions(instruction_node_list):
     return output_list
 
 
-def highlight_node(node, node_set):
+# def highlight_node(node, node_set):
+#     children = list_children(node)
+
+#     if node['id'] not in node_set:
+#         return False
+
+#     if not children:
+#         return True
+
+#     for child in children:
+#         if highlight_node(child, node_set):
+#             continue
+        
+#         return False
+            
+#     return True
+
+
+def highlight_node(node, node_set, isParent=True):
+
     children = list_children(node)
 
     if node['id'] not in node_set:
         return False
 
-    if not children:
+    if not children:# or functools.reduce(lambda a, b: a and b, [child['id'] in node_set for child in children]):
         return True
-
-    for child in children:
-        if highlight_node(child, node_set):
-            continue
-
-        return False
     
-    return True
+    if isParent:
+        for child in children:
+            if highlight_node(child, node_set, False):
+                continue
+            
+            return False
+
+        return True
+    else:
+        for child in children:
+            if highlight_node(child, node_set, False):
+                return True
+        
+        return False
+            
+    
 
 
 
@@ -400,7 +429,7 @@ def main_render(stack, conn):
                 if valid_source(ast, fro, length, source_index):
                     ast_node = search_ast((ast, []), fro, length, source_index)
 
-                    if ast_node is None: # TODO Investigate invalid inner ranges
+                    if ast_node is None:
                         print(f"Could not find ast node from source mapping: {fro} : {length} : {source_index}")
                     else:
                         instruction_node_list.append( (stack.instructions_order[stack_entry][pc], opcode, ast_node) )
@@ -448,7 +477,7 @@ def main_render(stack, conn):
             highlighted_indices = set()
             
 
-            for node_id, node in node_set.items(): # If all children are highlighted, then highlight the parents too
+            for node_id, node in node_set.items(): # If all children have somethings highlighted, then highlight the parents too
                 if node_id not in highlighted_nodes and highlight_node(node, node_set):
                     highlighted_nodes.add(node_id)
                     node_f, node_r, node_l = map(int, node['src'].split(':'))
