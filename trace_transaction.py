@@ -39,11 +39,11 @@ query_source = """
 """
 
 
-# validAstTypes = ['ParameterList', 'ExpressionStatement', 'VariableDeclaration', 'VariableDeclarationStatement', 'DoWhileStatement', 'WhileStatement', 'ForStatement', 'IfStatement',
-#                   'Return', 'Assignment', 'PlaceholderStatement']
+validAstTypes = [   'ParameterList', 'ExpressionStatement', 'VariableDeclaration', 'VariableDeclarationStatement', 'Return', 'Assignment', 'Identifier',
+                    'BinaryOperation', 'Literal', 'MemberAccess', 'IndexAccess', 'FunctionCall', 'UnaryOperation']
 
-# invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'Identifier', 'BinaryOperation',
-#                    'FunctionDefinition', 'Literal', 'MemberAccess', 'IndexAccess', 'FunctionCall', 'UnaryOperation']
+invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'DoWhileStatement', 'WhileStatement', 'ForStatement', 'IfStatement',
+                   'FunctionDefinition', 'PlaceholderStatement']
 
 node_children_names = { 'parameters', 'statements', 'nodes', 'arguments', 'declarations', 'body', 'expression', 'leftHandSide', 'rightHandSide', 
                         'leftExpression', 'rightExpression', 'initializationExpression', 'initialValue', 'expression', 'trueBody', 'falseBody', 
@@ -225,67 +225,35 @@ def remove_consecutives(node_list):
 def group_instructions(instruction_node_list):
     """Try to group bytecode instructions that correspond to the same solidity instruction"""
     
-    # explored_nodes = set()
     output_list = []
     grouped_nodes = {}
-    # set_stack = []
     scope = None
 
-    # 0x56 JUMP, 0x57 JUMPI, 0x5B JUMPDEST
-    # repeatingNodes = {'WhileStatement', 'DoWhileStatement', 'ForStatement', 'FunctionCall'}
     opcodes = {'JUMP': 0x56, 'JUMPI': 0x57, 'JUMPDEST': 0x5B}
-    # curr_id = instruction_node_list[0][1]['id']
     
     for idx, (opcode, node_wrapper) in enumerate(instruction_node_list):
         # TODO Optimize
-        # Fine grain method
-        # if node['id'] not in explored_nodes:
-        #     if node['nodeType'] in repeatingNodes:
-        #         set_stack.append(explored_nodes)
-        #         explored_nodes = set()
-        #         curr_id = node['id']
 
-        #     explored_nodes.add(node['id'])
-        #     grouped_node_list.append((opcode, node))
-        
-        # else:
-        #     if node['id'] == curr_id:
-        #         if node['nodeType'] in {'ForStatement', 'DoWhileStatement', 'WhileStatement'}:
-        #             if opcode == opcodes['JUMP'] or opcode == opcodes['JUMPDEST'] and instruction_node_list[idx - 1][0] == opcodes['JUMPI']:
-        #                 explored_nodes = set_stack.pop()
-                
-        #         elif node['nodeType'] == "FunctionCall" or 'expression' in node and node['expression']['nodeType'] == "FunctionCall":
-        #             if opcode == opcodes['JUMP']:
-        #                 explored_nodes = set_stack.pop()
-        
-        # Coarse grain method
-        # if node['id'] not in explored_nodes:
-        #     if opcode == opcodes['JUMPI']:# or opcode == opcodes['JUMP']:
-        #         explored_nodes = set()
-
-        #     if opcode != opcodes['JUMPDEST'] or node['nodeType'] != 'FunctionCall':
-        #         output_list.append((opcode, node))
-        #         explored_nodes.add(node['id'])
-
-        # Bottom-Up method
         node, lineage = node_wrapper
-
-        for ancestor in lineage:
-            if ancestor['nodeType'] in {'ModifierDefinition', 'FunctionDefinition'}:
-                scope = ancestor['src']
-                break
-
+        if node['nodeType'] in {'ModifierDefinition', 'FunctionDefinition'}:
+            scope = node['src']
+        else:
+            for ancestor in lineage:
+                if ancestor['nodeType'] in {'ModifierDefinition', 'FunctionDefinition'}:
+                    scope = ancestor['src']
+                    break
 
         if not scope:
             continue
         elif opcode == opcodes['JUMPI'] or opcode == opcodes['JUMP']:
             output_list.append((scope, grouped_nodes))
             grouped_nodes = {}
+        elif opcode != opcodes['JUMPDEST']:
+            grouped_nodes[node['id']] = node
 
-        grouped_nodes[node['id']] = node
+    if grouped_nodes:
+        output_list.append((scope, grouped_nodes))
 
-        # output_list.append((opcode, node)) # Debug
-        
     return output_list
 
 
@@ -307,7 +275,7 @@ def group_instructions(instruction_node_list):
 #     return True
 
 
-def highlight_node(node, node_set, isParent=True):
+def highlight_node_family(node, node_set, isParent=True):
 
     children = list_children(node)
 
@@ -319,7 +287,7 @@ def highlight_node(node, node_set, isParent=True):
     
     if isParent:
         for child in children:
-            if highlight_node(child, node_set, False):
+            if highlight_node_family(child, node_set, False):
                 continue
             
             return False
@@ -327,13 +295,31 @@ def highlight_node(node, node_set, isParent=True):
         return True
     else:
         for child in children:
-            if highlight_node(child, node_set, False):
+            if highlight_node_family(child, node_set, False):
                 return True
         
         return False
-            
+
+
+# def highlight_node_family(node, node_set, isParent=True):
+
+#     children = list_children(node)
+
+#     if not children:
+#         return [node] if node['id'] in node_set else []
+
+
+#     marked_nodes = []
+
+
+#     for child in children:
+#         if highlight_node_family(child, node_set, False):
+#             marked_nodes.append(child)
+#             continue
     
 
+#     return marked_nodes + [node] if isParent and len(marked_nodes) == len(children) else marked_nodes
+    
 
 
 def main_render(stack, conn):
@@ -446,42 +432,26 @@ def main_render(stack, conn):
         line_index, char_index = create_source_index(code)
         
         step_counter = 0
-        print('Displaying execution steps:')
+        steps = []
         for scope, node_set in group_instructions(instruction_node_list):#remove_consecutives(instruction_node_list):
-            # if node['nodeType'] in validAstTypes:
-            #     node_f, node_r, node_l = map(int, node['src'].split(':'))
-
-            #     line_set = OrderedDict()
-            #     for c in range(node_f, node_f + node_r):
-            #         line_set[line_index[c]] = True
-                
-            #     char_list = []
-            #     for line in line_set:
-            #         char_list += char_index[line]
-                
-            #     source_display = ""
-            #     for char in char_list:
-            #         source_display += code[char]
-
-            #     source_display = code[node_f : node_f + node_r] # Debug
-                    
-
-            #     print(f"line {line_index[node_f] + 1}: {source_display.lstrip()} : node_id {node['id']} : {node['nodeType']} : OP {hex(opcode)}\n")
-            # elif node['nodeType'] in invalidAstTypes:
-            #     continue
-            # else:
-            #     print(f"Warning: Unknown AST Node type: {node['nodeType']} encountered during AST search.")
 
             scope_f, scope_r, scope_l = map(int, scope.split(':'))
             highlighted_nodes = set()
             highlighted_indices = set()
+            node_types = []
             
+            for _, node in node_set.items():
+            
+                if node['nodeType'] in validAstTypes:
+                    node_types.append(node['nodeType'])
 
-            for node_id, node in node_set.items(): # If all children have somethings highlighted, then highlight the parents too
-                if node_id not in highlighted_nodes and highlight_node(node, node_set):
-                    highlighted_nodes.add(node_id)
-                    node_f, node_r, node_l = map(int, node['src'].split(':'))
-                    highlighted_indices.update(range(node_f, node_f + node_r + 1))
+                    if node['id'] not in highlighted_nodes: #and highlight_node_family(node, node_set):
+                        highlighted_nodes.add(node['id'])
+                        node_f, node_r, node_l = map(int, node['src'].split(':'))
+                        highlighted_indices.update(range(node_f, node_f + node_r + 1))
+
+                elif node['nodeType'] not in invalidAstTypes:
+                    print(f"Warning: Unknown AST Node type: {node['nodeType']} encountered during mapping to source.")
             
             source_display = ""
 
@@ -499,9 +469,14 @@ def main_render(stack, conn):
 
 
                 source_display += code[i]
-            
-            print(f"step {step_counter}:\nline: {line_index[scope_f] + 1} : {source_display}{color_normal}\n")
-            step_counter += 1
+            if node_types:
+                steps.append(f"step {step_counter}:\nline: {line_index[scope_f] + 1} : {source_display}{color_normal} : {node_types}\n")
+                step_counter += 1
+        
+        if steps:
+            print('Displaying execution steps:')
+            for step in steps:
+                print(step)
             
 
         print(f"{color_normal}\n\n")
