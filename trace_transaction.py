@@ -257,71 +257,6 @@ def group_instructions(instruction_node_list):
     return output_list
 
 
-# def highlight_node(node, node_set):
-#     children = list_children(node)
-
-#     if node['id'] not in node_set:
-#         return False
-
-#     if not children:
-#         return True
-
-#     for child in children:
-#         if highlight_node(child, node_set):
-#             continue
-        
-#         return False
-            
-#     return True
-
-
-def highlight_node_family(node, node_set, isParent=True):
-
-    children = list_children(node)
-
-    if node['id'] not in node_set:
-        return False
-
-    if not children:# or functools.reduce(lambda a, b: a and b, [child['id'] in node_set for child in children]):
-        return True
-    
-    if isParent:
-        for child in children:
-            if highlight_node_family(child, node_set, False):
-                continue
-            
-            return False
-
-        return True
-    else:
-        for child in children:
-            if highlight_node_family(child, node_set, False):
-                return True
-        
-        return False
-
-
-# def highlight_node_family(node, node_set, isParent=True):
-
-#     children = list_children(node)
-
-#     if not children:
-#         return [node] if node['id'] in node_set else []
-
-
-#     marked_nodes = []
-
-
-#     for child in children:
-#         if highlight_node_family(child, node_set, False):
-#             marked_nodes.append(child)
-#             continue
-    
-
-#     return marked_nodes + [node] if isParent and len(marked_nodes) == len(children) else marked_nodes
-    
-
-
 def main_render(stack, conn):
     """Renders a trace in human-readable format."""
 
@@ -383,13 +318,6 @@ def main_render(stack, conn):
         else:
             object = bytecode
 
-        
-        # if object == bytecode:
-        #     print('Compiled bytecode matches perfectly')
-        # elif len(object) == len(bytecode):
-        #     print('Compiled bytecode does not match perfectly, but is the same size')
-        # else:
-        #     print(f'Warning: Deployed bytecode is length {len(bytecode)}, but compiled bytecode is length {len(object)}')
 
         pc = 0
         instruction_node_list = []
@@ -426,6 +354,7 @@ def main_render(stack, conn):
                 pc += (opcode - 0x5f)
             pc += 1
 
+
         # Sort the list and clip the node ordering
         instruction_node_list = list(map(lambda a: (a[1], a[2]), sorted(instruction_node_list, key = lambda a: a[0])))
 
@@ -433,7 +362,7 @@ def main_render(stack, conn):
         
         step_counter = 0
         steps = []
-        for scope, node_set in group_instructions(instruction_node_list):#remove_consecutives(instruction_node_list):
+        for idx, (scope, node_set) in enumerate(group_instructions(instruction_node_list)):#remove_consecutives(instruction_node_list):
 
             scope_f, scope_r, scope_l = map(int, scope.split(':'))
             highlighted_nodes = set()
@@ -456,7 +385,7 @@ def main_render(stack, conn):
             source_display = ""
 
             curr_color = color_normal
-            for i in range(scope_f, scope_f + scope_r): # TODO Check if range is correct
+            for i in range(scope_f, scope_f + scope_r): # TODO Check when range is incorrect
                 if i in highlighted_indices:
                     if curr_color == color_normal:    
                         curr_color = color_highlight
@@ -490,11 +419,11 @@ if __name__ == '__main__':
         # transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack
 
         # transaction = '0xa2f866c2b391c9d35d8f18edb006c9a872c0014b992e4b586cc2f11dc2b24ebd' # test1
-        # transaction = '0xc1f534b03e5d4840c091c54224c3381b892b8f1a2869045f49913f3cfaf95ba7' # Million Money
+        transaction = '0xc1f534b03e5d4840c091c54224c3381b892b8f1a2869045f49913f3cfaf95ba7' # Million Money
         # transaction = '0xa537c0ae6172fc43ddadd0f94d2821ae278fae4ba8147ea7fa882fa9b0a6a51a' # Greed Pit
         # transaction = '0x51f37d7b41e6864d1190d8f596e956501d9f4e0f8c598dbcbbc058c10b25aa3b' # Dust
         # transaction = '0x3f0a309ebbc5642ec18047fb902c383b33e951193bda6402618652e9234c9abb' # Tokens
-        transaction = '0x6aec28ad65052132bf04c0ed621e24c007b2476fe6810389232d3ac4222c0ccc' # Doubleway
+        # transaction = '0x6aec28ad65052132bf04c0ed621e24c007b2476fe6810389232d3ac4222c0ccc' # Doubleway
         # transaction = '0xa228e903a5d751e4268a602bd6b938392272e4024e2071f7cd4a479e8125c370' # Saturn Network 2
 
         conn = pymysql.connect(
