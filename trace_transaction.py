@@ -222,6 +222,44 @@ def remove_consecutives(node_list):
     return output_list
 
 
+def navigate_trace(step_trace):
+    
+    index = 0
+    while True:
+        print(f'\033c{color_normal}') # Clear Terminal
+        if index < 0:
+            index = 0
+            print(step_trace[index])
+            print('Reached the start of the trace.')
+        elif index >= len(step_trace):
+            index = len(step_trace) - 1
+            print(step_trace[index])
+            print('Reached the end of the trace.')
+        else:
+            print(step_trace[index])
+        
+        print('\nControls: (n)ext step - (p)revious step - (q)uit')
+
+        while True:
+            user_input = input('>:')
+            user_input = user_input.capitalize()
+
+            if user_input in {'P' or 'PREV' or 'PREVIOUS'}:
+                index -= 1
+                break
+            elif user_input in {'N' or 'NEXT'}:
+                index += 1
+                break
+            elif user_input in {'Q' or 'QUIT'}:
+                exit(0)
+            else:
+                print(f'\033c{step_trace[index]}')
+                print(f'Error: Unknown command \"{user_input}\".')
+                print('\nControls: (n)ext step - (p)revious step - (q)uit')
+        
+    
+
+
 def group_instructions(instruction_node_list):
     """Try to group bytecode instructions that correspond to the same solidity instruction"""
     
@@ -260,13 +298,15 @@ def group_instructions(instruction_node_list):
 def main_render(stack, conn):
     """Renders a trace in human-readable format."""
 
+    step_trace = []
+
     for stack_entry in stack.trace:
-        print(f"{color_normal}{'#'*80}")
-        print(f'EVM is running code at {stack_entry.address}. Reason: {stack_entry.reason}')
+        current_step = f"{color_normal}{'#'*80}\nEVM is running code at {stack_entry.address}. Reason: {stack_entry.reason}\n"
+        # print(current_step)
         res = get_contract_from_db(stack_entry.address, conn)
 
         if res is None:
-            print("Source not found in db, skipping...")
+            current_step += "Source not found in db, skipping..."
             continue
 
         code = res['code']
@@ -399,16 +439,15 @@ def main_render(stack, conn):
 
                 source_display += code[i]
             if node_types:
-                steps.append(f"step {step_counter}:\nline: {line_index[scope_f] + 1} : {source_display}{color_normal} : {node_types}\n")
+                current_step += f"step {step_counter}:\nline: {line_index[scope_f] + 1} : {source_display}{color_normal} : {node_types}\n"
+                step_trace.append(current_step)
+                current_step = ""
                 step_counter += 1
-        
-        if steps:
-            print('Displaying execution steps:')
-            for step in steps:
-                print(step)
             
 
-        print(f"{color_normal}\n\n")
+        # print(f"{color_normal}\n\n")
+    
+    navigate_trace(step_trace)
 
 # Execution start
 if __name__ == '__main__':
@@ -419,11 +458,11 @@ if __name__ == '__main__':
         # transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack
 
         # transaction = '0xa2f866c2b391c9d35d8f18edb006c9a872c0014b992e4b586cc2f11dc2b24ebd' # test1
-        transaction = '0xc1f534b03e5d4840c091c54224c3381b892b8f1a2869045f49913f3cfaf95ba7' # Million Money
+        # transaction = '0xc1f534b03e5d4840c091c54224c3381b892b8f1a2869045f49913f3cfaf95ba7' # Million Money
         # transaction = '0xa537c0ae6172fc43ddadd0f94d2821ae278fae4ba8147ea7fa882fa9b0a6a51a' # Greed Pit
         # transaction = '0x51f37d7b41e6864d1190d8f596e956501d9f4e0f8c598dbcbbc058c10b25aa3b' # Dust
         # transaction = '0x3f0a309ebbc5642ec18047fb902c383b33e951193bda6402618652e9234c9abb' # Tokens
-        # transaction = '0x6aec28ad65052132bf04c0ed621e24c007b2476fe6810389232d3ac4222c0ccc' # Doubleway
+        transaction = '0x6aec28ad65052132bf04c0ed621e24c007b2476fe6810389232d3ac4222c0ccc' # Doubleway
         # transaction = '0xa228e903a5d751e4268a602bd6b938392272e4024e2071f7cd4a479e8125c370' # Saturn Network 2
 
         conn = pymysql.connect(
