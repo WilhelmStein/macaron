@@ -12,6 +12,7 @@ import evm_stack
 import os.path
 import pickle
 import functools
+from trace_shell import MacaronShell
 
 
 # Globals
@@ -219,45 +220,7 @@ def remove_consecutives(node_list):
         prevNode = node
         output_list.append(node)
     
-    return output_list
-
-
-def navigate_trace(step_trace):
-    
-    index = 0
-    while True:
-        print(f'\033c{color_normal}') # Clear Terminal
-        if index < 0:
-            index = 0
-            print(step_trace[index])
-            print('Reached the start of the trace.')
-        elif index >= len(step_trace):
-            index = len(step_trace) - 1
-            print(step_trace[index])
-            print('Reached the end of the trace.')
-        else:
-            print(step_trace[index])
-        
-        print('\nControls: (n)ext step - (p)revious step - (q)uit')
-
-        while True:
-            user_input = input('>:')
-            user_input = user_input.capitalize()
-
-            if user_input in {'P' or 'PREV' or 'PREVIOUS'}:
-                index -= 1
-                break
-            elif user_input in {'N' or 'NEXT'}:
-                index += 1
-                break
-            elif user_input in {'Q' or 'QUIT'}:
-                exit(0)
-            else:
-                print(f'\033c{step_trace[index]}')
-                print(f'Error: Unknown command \"{user_input}\".')
-                print('\nControls: (n)ext step - (p)revious step - (q)uit')
-        
-    
+    return output_list    
 
 
 def group_instructions(instruction_node_list):
@@ -295,7 +258,7 @@ def group_instructions(instruction_node_list):
     return output_list
 
 
-def main_render(stack, conn):
+def calculate_trace_display(stack, conn):
     """Renders a trace in human-readable format."""
 
     step_trace = []
@@ -446,8 +409,7 @@ def main_render(stack, conn):
             
 
         # print(f"{color_normal}\n\n")
-    
-    navigate_trace(step_trace)
+    return step_trace
 
 # Execution start
 if __name__ == '__main__':
@@ -475,8 +437,11 @@ if __name__ == '__main__':
 
         stack = evm_stack.EVMExecuctionStack()
         stack.import_transaction(transaction)
+        step_trace = calculate_trace_display(stack, conn)
 
-        main_render(stack, conn)
+        navigator = MacaronShell()
+        navigator.load_trace(step_trace)
+        navigator.cmdloop()
     except Exception:
         import pdb
         import traceback
