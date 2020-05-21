@@ -261,7 +261,7 @@ def group_instructions(instruction_node_list):
 def calculate_trace_display(stack, conn):
     """Renders a trace in human-readable format."""
 
-    step_trace = []
+    contract_trace = []
 
     for stack_entry in stack.trace:
         current_step = f"{color_normal}{'#'*80}\nEVM is running code at {stack_entry.address}. Reason: {stack_entry.reason}\n"
@@ -364,7 +364,7 @@ def calculate_trace_display(stack, conn):
         line_index, char_index = create_source_index(code)
         
         step_counter = 0
-        steps = []
+        step_trace = []
         for idx, (scope, node_set) in enumerate(group_instructions(instruction_node_list)):#remove_consecutives(instruction_node_list):
 
             scope_f, scope_r, scope_l = map(int, scope.split(':'))
@@ -399,17 +399,17 @@ def calculate_trace_display(stack, conn):
                         curr_color = color_normal
                         source_display += curr_color
 
-
                 source_display += code[i]
+                
             if node_types:
                 current_step += f"step {step_counter}:\nline: {line_index[scope_f] + 1} : {source_display}{color_normal} : {node_types}\n"
-                step_trace.append(current_step)
+                step_trace.append((current_step, node_types))
                 current_step = ""
                 step_counter += 1
             
-
-        # print(f"{color_normal}\n\n")
-    return step_trace
+        contract_trace.append(step_trace)
+        
+    return contract_trace
 
 # Execution start
 if __name__ == '__main__':
@@ -439,8 +439,7 @@ if __name__ == '__main__':
         stack.import_transaction(transaction)
         step_trace = calculate_trace_display(stack, conn)
 
-        navigator = MacaronShell()
-        navigator.load_trace(step_trace)
+        navigator = MacaronShell(step_trace)
         navigator.cmdloop()
     except Exception:
         import pdb
