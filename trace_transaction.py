@@ -272,7 +272,7 @@ def calculate_trace_display(stack, conn):
             current_step += "Source not found in db, skipping..."
             continue
 
-        code = res['code']
+        code = res['code'].encode()
         contract_name = res['contract_name']
         bytecode = res['hex_bytecode']
         source_map = res['source_map']
@@ -385,24 +385,24 @@ def calculate_trace_display(stack, conn):
                 elif node['nodeType'] not in invalidAstTypes:
                     print(f"Warning: Unknown AST Node type: {node['nodeType']} encountered during mapping to source.")
             
-            source_display = ""
+            source_display = bytearray()
 
             curr_color = color_normal
-            for i in range(scope_f, scope_f + scope_r): # TODO Check when range is incorrect
+            for i in range(scope_f, scope_f + scope_r):
                 if i in highlighted_indices:
                     if curr_color == color_normal:    
                         curr_color = color_highlight
-                        source_display += curr_color
+                        source_display += curr_color.encode()
                     
                 else:
                     if curr_color == color_highlight:
                         curr_color = color_normal
-                        source_display += curr_color
+                        source_display += curr_color.encode()
 
-                source_display += code[i]
+                source_display.append(code[i])
                 
             if node_types:
-                current_step += f"step {step_counter}:\nline: {line_index[scope_f] + 1} : {source_display}{color_normal} : {node_types}\n"
+                current_step += f"step {step_counter}:\nline: {line_index[scope_f] + 1} : {source_display.decode()}{color_normal} : {node_types}\n"
                 step_trace.append((current_step, node_types))
                 current_step = ""
                 step_counter += 1
