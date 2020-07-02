@@ -41,14 +41,15 @@ query_source = """
 
 
 validAstTypes = [   'ParameterList', 'ExpressionStatement', 'VariableDeclaration', 'VariableDeclarationStatement', 'Return', 'Assignment', 'Identifier',
-                    'BinaryOperation', 'Literal', 'MemberAccess', 'IndexAccess', 'FunctionCall', 'UnaryOperation']
+                    'BinaryOperation', 'Literal', 'MemberAccess', 'IndexAccess', 'FunctionCall', 'UnaryOperation', 'Continue', 'Break']
 
 invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'DoWhileStatement', 'WhileStatement', 'ForStatement', 'IfStatement',
                    'FunctionDefinition', 'PlaceholderStatement']
 
 node_children_names = { 'parameters', 'statements', 'nodes', 'arguments', 'declarations', 'body', 'expression', 'leftHandSide', 'rightHandSide', 
-                        'leftExpression', 'rightExpression', 'initializationExpression', 'initialValue', 'expression', 'trueBody', 'falseBody', 
-                        'condition', 'baseExpression', 'indexExpression', 'loopExpression', 'returnParameters', 'subExpression', 'eventCall', 'components' }
+                        'leftExpression', 'rightExpression', 'initializationExpression', 'initialValue', 'value', 'expression', 'trueBody', 'falseBody', 
+                        'condition', 'baseExpression', 'indexExpression', 'loopExpression', 'returnParameters', 'subExpression', 'eventCall', 'components',
+                        'externalReferences', '_codeLength', '_addr'}
 
 # Debug
 # validAstTypes += invalidAstTypes
@@ -74,7 +75,7 @@ def make_compiler_json(filename, optimization_enabled = False, optimization_runs
       }
     if evmVersion is None:
         del settings['evmVersion']
-    return {
+    output = {
       'language': "Solidity",
       'sources': {
         filename: {
@@ -83,6 +84,9 @@ def make_compiler_json(filename, optimization_enabled = False, optimization_runs
       },
       'settings': settings
     }
+
+    # print(output)
+    return output
 
 
 def create_source_index(source):
@@ -94,13 +98,13 @@ def create_source_index(source):
         line_index[i] = line
         char_index[line].append(i)
 
-        if s == LINE_SPLIT_DELIMETER:
+        if s == ord(LINE_SPLIT_DELIMETER):
             line +=1
     return (line_index, char_index)
 
 
 def process_compiler_version(compiler):
-    print(compiler)
+    # print(compiler)
     compiler_processed = compiler[:7]
     if compiler_processed[-1] == '+':
         compiler_processed = compiler_processed[:-1]
@@ -128,7 +132,7 @@ def compile_solidity(code, compiler, optimization, other_settings, **kwargs):
         output_js = solcx.compile_standard(make_compiler_json('/tmp/temp.sol', optimization_enabled, optimization_runs, evmVersion), allow_paths='/tmp')
     except solcx.exceptions.SolcError as e:
         print("SOLC Compiler error")
-        print(e)
+        print(e.message)
         return None
 
     ast = None
@@ -153,6 +157,37 @@ def get_contract_from_db(a, conn):
         if sum(v is None for v in row.values) > 1:
             return None
         return row
+
+def save_compiler_output(stack_entry_folder, contract_wrapper):
+    try:
+        ast_path = f"{stack_entry_folder}/ast.pkl"
+        solidity_file_path = f"{stack_entry_folder}/solidity_file.pkl"
+
+        if os.path.exists(stack_entry_folder):
+            with open(ast_path, "rb") as f:
+                ast = pickle.load(f)
+            
+            with open(solidity_file_path, "rb") as f:
+                solidity_file = pickle.load(f)
+        else:
+            ast, solidity_file = compile_solidity(**contract_wrapper)
+
+            if ast is None:
+                return (None, solidity_file)
+
+            os.makedirs(stack_entry_folder)
+
+            with open(ast_path,"wb") as f:
+                pickle.dump(ast,f)
+            
+            with open(solidity_file_path,"wb") as f:
+                pickle.dump(solidity_file,f)
+        
+        return (ast, solidity_file)
+
+    except Exception as e:
+        print(e)
+        exit(1)
 
 
 def valid_source(ast, fro, length, source_index):
@@ -182,14 +217,15 @@ def search_ast(wrapper, fro, length, source_index):
 
     if ast is None:
         raise Exception(f"Node is None. Searching for {fro} : {length} : {source_index}")
-
-    curr_node_s, curr_node_r, curr_node_m = map(int , ast['src'].split(':'))
+    
     output_node = None
+    if 'src' in ast:
+        curr_node_s, curr_node_r, curr_node_m = map(int , ast['src'].split(':'))
 
-    if fro == curr_node_s and length == curr_node_r and curr_node_m == source_index:
-        output_node = (ast, lineage)
-    elif curr_node_s + curr_node_r < fro or curr_node_s > fro + length: # A small optimization, as to avoid a full dfs of the ast
-        return None
+        if fro == curr_node_s and length == curr_node_r and curr_node_m == source_index:
+            output_node = (ast, lineage)
+        elif curr_node_s + curr_node_r < fro or curr_node_s > fro + length: # A small optimization, as to avoid a full dfs of the ast
+            return None
 
     nodes = list_children(ast)
             
@@ -223,7 +259,7 @@ def remove_consecutives(node_list):
     return output_list    
 
 
-def group_instructions(instruction_node_list):
+def group_instructions(instruction_node_list): # TODO Fix certain function calls not being recorded
     """Try to group bytecode instructions that correspond to the same solidity instruction"""
     
     output_list = []
@@ -235,6 +271,7 @@ def group_instructions(instruction_node_list):
     for idx, (opcode, node_wrapper) in enumerate(instruction_node_list):
         # TODO Optimize
 
+        # Ascertain current node's scope (if applicable) by taking a look at its lineage
         node, lineage = node_wrapper
         if node['nodeType'] in {'ModifierDefinition', 'FunctionDefinition'}:
             scope = node['src']
@@ -243,13 +280,15 @@ def group_instructions(instruction_node_list):
                 if ancestor['nodeType'] in {'ModifierDefinition', 'FunctionDefinition'}:
                     scope = ancestor['src']
                     break
-
+        
+                    
+        # Ignore nodes with invalid scopes and greate groups between JUMP instructions
         if not scope:
             continue
         elif opcode == opcodes['JUMPI'] or opcode == opcodes['JUMP']:
             output_list.append((scope, grouped_nodes))
             grouped_nodes = {}
-        elif opcode != opcodes['JUMPDEST']:
+        elif opcode != opcodes['JUMPDEST']: # Do not use JUMPDEST instructions, as they only confuse the display process and their display is unnecessary
             grouped_nodes[node['id']] = node
 
     if grouped_nodes:
@@ -270,6 +309,7 @@ def calculate_trace_display(stack, conn):
 
         if res is None:
             current_step += "Source not found in db, skipping..."
+            contract_trace.append((current_step, []))
             continue
 
         code = res['code'].encode()
@@ -281,68 +321,38 @@ def calculate_trace_display(stack, conn):
         ast = solidity_file = None
         
         # Save compiler output as to not recompile each time
-        try:
-            ast_path = f"{stack_entry_folder}/ast.pkl"
-            solidity_file_path = f"{stack_entry_folder}/solidity_file.pkl"
+        ast, solidity_file = save_compiler_output(stack_entry_folder, res)
 
-            if os.path.exists(stack_entry_folder):
-                with open(ast_path, "rb") as f:
-                    ast = pickle.load(f)
-                
-                with open(solidity_file_path, "rb") as f:
-                    solidity_file = pickle.load(f)
-            else:
-                ast, solidity_file = compile_solidity(**res)
-
-                os.makedirs(stack_entry_folder)
-
-                with open(ast_path,"wb") as f:
-                    pickle.dump(ast,f)
-                
-                with open(solidity_file_path,"wb") as f:
-                    pickle.dump(solidity_file,f)
-
-        except Exception as e:
-            print(e)
-            exit(1)
-
-
-        if ast is None:
-            print('AST is empty or using legacyAST, which is not supported.')
+        if solidity_file is None or ast is None:
+            current_step += 'AST is empty or using legacyAST, which is not supported.'
+            contract_trace.append((current_step, []))
             continue
 
-        if True:# if source_map is None:
-            if solidity_file is None or ast is None:
-                continue
-
-            contract = solidity_file[contract_name]
-            source_map = contract['evm']['deployedBytecode']['sourceMap']
-            object = contract['evm']['deployedBytecode']['object']
-        else:
-            object = bytecode
+        contract = solidity_file[contract_name]
+        source_map = contract['evm']['deployedBytecode']['sourceMap']
+        object = contract['evm']['deployedBytecode']['object']
 
 
         pc = 0
         instruction_node_list = []
-        for s in source_map.split(';'):
-
-            # Filter out all instructions that were not part of the trace
+        for idx, s in enumerate(source_map.split(';')):
 
             opcode = int(object[pc * 2] + object[pc * 2 + 1], 16)
 
-            if pc in stack.instructions[stack_entry]:
-                if s:
-                    s_split = s.split(':')
-                    if s_split[0]:
-                        fro = int(s_split[0])
+            if s:
+                s_split = s.split(':')
+                if s_split[0]:
+                    fro = int(s_split[0])
 
-                    if len(s_split) > 1 and s_split[1]:
-                        length = int(s_split[1])
-                    
-                    if len(s_split) > 2 and s_split[2]:
-                        source_index = int(s_split[2])
-                    
+                if len(s_split) > 1 and s_split[1]:
+                    length = int(s_split[1])
                 
+                if len(s_split) > 2 and s_split[2]:
+                    source_index = int(s_split[2])
+
+
+            # Filter out all instructions that were not part of the trace
+            if pc in stack.instructions[stack_entry]:                
                 if valid_source(ast, fro, length, source_index):
                     ast_node = search_ast((ast, []), fro, length, source_index)
 
@@ -351,9 +361,9 @@ def calculate_trace_display(stack, conn):
                     else:
                         instruction_node_list.append( (stack.instructions_order[stack_entry][pc], opcode, ast_node) )
                         
-
+                        
+            # it's a push instruction, increment by extra size of instruction
             if 0x60 <= opcode < 0x80:
-                # it's a push instruction, increment by extra size of instruction
                 pc += (opcode - 0x5f)
             pc += 1
 
@@ -380,7 +390,7 @@ def calculate_trace_display(stack, conn):
                     if node['id'] not in highlighted_nodes: #and highlight_node_family(node, node_set):
                         highlighted_nodes.add(node['id'])
                         node_f, node_r, node_l = map(int, node['src'].split(':'))
-                        highlighted_indices.update(range(node_f, node_f + node_r + 1))
+                        highlighted_indices.update(range(node_f, node_f + node_r))
 
                 elif node['nodeType'] not in invalidAstTypes:
                     print(f"Warning: Unknown AST Node type: {node['nodeType']} encountered during mapping to source.")
@@ -411,21 +421,26 @@ def calculate_trace_display(stack, conn):
         
     return contract_trace
 
-# Execution start
+# Test start
 if __name__ == '__main__':
     try:
+        # Attacks
         # transaction = '0x0ec3f2488a93839524add10ea229e773f6bc891b4eb4794c3337d4495263790b'    # DAO Attack
-        # transaction = '0x863df6bfa4469f3ead0be8f9f2aae51c91a907b4'                            # Parity Attack
+        # transaction = '0x77e93eaa08349fff1c68025e77a2d95e3e88f673d33c5501664e958d8727d4a9'    # Parity Attack - Compilation Error
         # transaction = '0xd6c24da4e17aa18db03f9df46f74f119fa5c2314cb1149cd3f88881ddc475c5a'    # DAOSTACK Attack - Self Destructed :(
-        # transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack
+        # transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack - Compilation Error
 
-        # transaction = '0xa2f866c2b391c9d35d8f18edb006c9a872c0014b992e4b586cc2f11dc2b24ebd' # test1
-        # transaction = '0xc1f534b03e5d4840c091c54224c3381b892b8f1a2869045f49913f3cfaf95ba7' # Million Money
-        # transaction = '0xa537c0ae6172fc43ddadd0f94d2821ae278fae4ba8147ea7fa882fa9b0a6a51a' # Greed Pit
-        # transaction = '0x51f37d7b41e6864d1190d8f596e956501d9f4e0f8c598dbcbbc058c10b25aa3b' # Dust
-        # transaction = '0x3f0a309ebbc5642ec18047fb902c383b33e951193bda6402618652e9234c9abb' # Tokens
-        transaction = '0x6aec28ad65052132bf04c0ed621e24c007b2476fe6810389232d3ac4222c0ccc' # Doubleway
-        # transaction = '0xa228e903a5d751e4268a602bd6b938392272e4024e2071f7cd4a479e8125c370' # Saturn Network 2
+        # Other Tests
+        # transaction = '0x5c932a5c59f9691ca9f334fe744c00f9aabe64991ade8fea52a6e1b22a793664'    # Fomo3D
+        # transaction = '0x7e8738e2fe6e67ac07b003fe23e4961b0677d4ef345d141647cc407b915d6927'    # Sol Wallet - Compilation Error
+        # transaction = '0x129da6f54480b27d49411af82db7da5c98cf8f455508bc7e87838e938d4d0ef2'    # SafeMath
+        transaction = '0x26df3b770389b8f298446a25404d05402065bc8fe00ff5f6c0af6912c2c46947'    # E2D
+        # transaction = '0xa2f866c2b391c9d35d8f18edb006c9a872c0014b992e4b586cc2f11dc2b24ebd'    # test1
+        # transaction = '0xc1f534b03e5d4840c091c54224c3381b892b8f1a2869045f49913f3cfaf95ba7'    # Million Money
+        # transaction = '0x51f37d7b41e6864d1190d8f596e956501d9f4e0f8c598dbcbbc058c10b25aa3b'    # Dust
+        # transaction = '0x3f0a309ebbc5642ec18047fb902c383b33e951193bda6402618652e9234c9abb'    # Tokens
+        # transaction = '0x6aec28ad65052132bf04c0ed621e24c007b2476fe6810389232d3ac4222c0ccc'    # Doubleway
+        # transaction = '0xa228e903a5d751e4268a602bd6b938392272e4024e2071f7cd4a479e8125c370'    # Saturn Network 2 - Compilation Error
 
         conn = pymysql.connect(
             host="127.0.0.1",
