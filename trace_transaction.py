@@ -59,7 +59,7 @@ NodeWrapper = namedtuple('NodeWrapper', ['node', 'lineage'])
 
 
 # Function Definitions
-def make_compiler_json(filename, optimization_enabled = False, optimization_runs = 0, evmVersion = None):
+def __make_compiler_json(filename, optimization_enabled = False, optimization_runs = 0, evmVersion = None):
     settings = {
         'optimizer': {
           'enabled': optimization_enabled,
@@ -89,7 +89,7 @@ def make_compiler_json(filename, optimization_enabled = False, optimization_runs
     return output
 
 
-def create_source_index(source):
+def __create_source_index(source):
     line = 0
     line_index = {}
     char_index = defaultdict(list)
@@ -103,7 +103,7 @@ def create_source_index(source):
     return (line_index, char_index)
 
 
-def process_compiler_version(compiler):
+def __process_compiler_version(compiler):
     # print(compiler)
     compiler_processed = compiler[:7]
     if compiler_processed[-1] == '+':
@@ -113,11 +113,11 @@ def process_compiler_version(compiler):
     return compiler_processed
 
 
-def compile_solidity(code, compiler, optimization, other_settings, **kwargs):
+def __compile_solidity(code, compiler, optimization, other_settings, **kwargs):
     assert isinstance(code, str)
     with open('/tmp/temp.sol', 'w') as f:
         f.write(code)
-    compiler_processed = process_compiler_version(compiler)
+    compiler_processed = __process_compiler_version(compiler)
     # process optimization flag
     optimization_enabled, _, optimization_runs, _ = optimization.split(' ')
     optimization_enabled = optimization_enabled.lower() == 'yes'
@@ -129,7 +129,7 @@ def compile_solidity(code, compiler, optimization, other_settings, **kwargs):
         solcx.install_solc(compiler_processed)
         solcx.set_solc_version(compiler_processed)
 
-        output_js = solcx.compile_standard(make_compiler_json('/tmp/temp.sol', optimization_enabled, optimization_runs, evmVersion), allow_paths='/tmp')
+        output_js = solcx.compile_standard(__make_compiler_json('/tmp/temp.sol', optimization_enabled, optimization_runs, evmVersion), allow_paths='/tmp')
     except solcx.exceptions.SolcError as e:
         print("SOLC Compiler error")
         print(e.message)
@@ -147,7 +147,7 @@ def compile_solidity(code, compiler, optimization, other_settings, **kwargs):
     return (ast, contract)
 
 
-def get_contract_from_db(a, conn):
+def __get_contract_from_db(a, conn):
     """Connect to contract-lib.com and receive the contract's code."""
 
     res = pd.read_sql_query(query_source%a, conn)
@@ -158,7 +158,8 @@ def get_contract_from_db(a, conn):
             return None
         return row
 
-def save_compiler_output(stack_entry_folder, contract_wrapper):
+def __compile_contract(stack_entry_folder, contract_wrapper):
+    """Compile a contract if you have not already and save its output, or load it if it already exists. Then return it's AST and Solidity_File data."""
     try:
         ast_path = f"{stack_entry_folder}/ast.pkl"
         solidity_file_path = f"{stack_entry_folder}/solidity_file.pkl"
@@ -170,7 +171,7 @@ def save_compiler_output(stack_entry_folder, contract_wrapper):
             with open(solidity_file_path, "rb") as f:
                 solidity_file = pickle.load(f)
         else:
-            ast, solidity_file = compile_solidity(**contract_wrapper)
+            ast, solidity_file = __compile_solidity(**contract_wrapper)
 
             if ast is None:
                 return (None, solidity_file)
@@ -190,13 +191,13 @@ def save_compiler_output(stack_entry_folder, contract_wrapper):
         exit(1)
 
 
-def valid_source(ast, fro, length, source_index):
+def __valid_source(ast, fro, length, source_index):
     ast_fro, ast_length, ast_source_index = map(int, ast['src'].split(':'))
 
     return ( fro >= ast_fro and fro + length <= ast_fro + ast_length and ast_source_index == source_index )
 
 
-def list_children(ast):
+def __list_children(ast):
     """Utility function that, given an ast node, returns its children in list form."""
     nodes = []
 
@@ -210,7 +211,7 @@ def list_children(ast):
     return nodes
 
 
-def search_ast(wrapper, fro, length, source_index):
+def __search_ast(wrapper, fro, length, source_index):
     """Recursive function that searches a given AST for a node with a specific source mapping."""
     
     ast, lineage = wrapper
@@ -227,14 +228,14 @@ def search_ast(wrapper, fro, length, source_index):
         elif curr_node_s + curr_node_r < fro or curr_node_s > fro + length: # A small optimization, as to avoid a full dfs of the ast
             return None
 
-    nodes = list_children(ast)
+    nodes = __list_children(ast)
             
     
     for node in nodes:
         if node is None:
             continue
 
-        returned_node = search_ast((node, [ast] + lineage), fro, length, source_index)
+        returned_node = __search_ast((node, [ast] + lineage), fro, length, source_index)
 
         if returned_node is None:
             continue
@@ -244,7 +245,7 @@ def search_ast(wrapper, fro, length, source_index):
     return output_node
 
 
-def remove_consecutives(node_list):
+def __remove_consecutives(node_list):
     """Remove consecutive entries from a given list."""
 
     prevNode = None
@@ -259,7 +260,7 @@ def remove_consecutives(node_list):
     return output_list    
 
 
-def group_instructions(instruction_node_list): # TODO Fix certain function calls not being recorded
+def __group_instructions(instruction_node_list): # TODO Fix certain function calls not being recorded
     """Try to group bytecode instructions that correspond to the same solidity instruction"""
     
     output_list = []
@@ -305,7 +306,7 @@ def calculate_trace_display(stack, conn):
     for stack_entry in stack.trace:
         current_step = f"{color_normal}{'#'*80}\nEVM is running code at {stack_entry.address}. Reason: {stack_entry.reason}\n"
         # print(current_step)
-        res = get_contract_from_db(stack_entry.address, conn)
+        res = __get_contract_from_db(stack_entry.address, conn)
 
         if res is None:
             current_step += "Source not found in db, skipping..."
@@ -320,8 +321,8 @@ def calculate_trace_display(stack, conn):
         stack_entry_folder = f"{stack.starting_transaction}/{stack_entry[0]}"
         ast = solidity_file = None
         
-        # Save compiler output as to not recompile each time
-        ast, solidity_file = save_compiler_output(stack_entry_folder, res)
+        # Compile contract that corresponds to current stack entry
+        ast, solidity_file = __compile_contract(stack_entry_folder, res)
 
         if solidity_file is None or ast is None:
             current_step += 'AST is empty or using legacyAST, which is not supported.'
@@ -332,7 +333,7 @@ def calculate_trace_display(stack, conn):
         source_map = contract['evm']['deployedBytecode']['sourceMap']
         object = contract['evm']['deployedBytecode']['object']
 
-
+        # Match instructions to the ast nodes that they belong to
         pc = 0
         instruction_node_list = []
         for idx, s in enumerate(source_map.split(';')):
@@ -353,8 +354,8 @@ def calculate_trace_display(stack, conn):
 
             # Filter out all instructions that were not part of the trace
             if pc in stack.instructions[stack_entry]:                
-                if valid_source(ast, fro, length, source_index):
-                    ast_node = search_ast((ast, []), fro, length, source_index)
+                if __valid_source(ast, fro, length, source_index):
+                    ast_node = __search_ast((ast, []), fro, length, source_index)
 
                     if ast_node is None:
                         print(f"Could not find ast node from source mapping: {fro} : {length} : {source_index}")
@@ -371,11 +372,12 @@ def calculate_trace_display(stack, conn):
         # Sort the list and clip the node ordering
         instruction_node_list = list(map(lambda a: (a[1], a[2]), sorted(instruction_node_list, key = lambda a: a[0])))
 
-        line_index, char_index = create_source_index(code)
+        line_index, char_index = __create_source_index(code)
         
+        # Highlight executed code
         step_counter = 0
         step_trace = []
-        for idx, (scope, node_set) in enumerate(group_instructions(instruction_node_list)):#remove_consecutives(instruction_node_list):
+        for idx, (scope, node_set) in enumerate(__group_instructions(instruction_node_list)):#remove_consecutives(instruction_node_list):
 
             scope_f, scope_r, scope_l = map(int, scope.split(':'))
             highlighted_nodes = set()
