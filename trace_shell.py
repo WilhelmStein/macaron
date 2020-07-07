@@ -58,7 +58,7 @@ class MacaronShell(cmd.Cmd):
         '''Navigate to the previous function call.'''
         while self.contract_index <= len(self.contract_trace) - 1:
             self.do_next(arg)
-            if functools.reduce(lambda a, b: a or b, [ node_type == 'FunctionCall' for node_type in self.contract_trace[self.contract_index][self.step_index][1] ]):
+            if functools.reduce(lambda a, b: a or b, [ node_type == 'FunctionCall' for node_type in self.get_current_step().debug_info ]):
                 break
 
 
@@ -66,7 +66,7 @@ class MacaronShell(cmd.Cmd):
         '''Navigate to the next function call.'''
         while self.contract_index >= 0:
             self.do_prev(arg)
-            if functools.reduce(lambda a, b: a or b, [ node_type == 'FunctionCall' for node_type in self.contract_trace[self.contract_index][self.step_index][1] ]):
+            if functools.reduce(lambda a, b: a or b, [ node_type == 'FunctionCall' for node_type in self.get_current_step().debug_info ]):
                 break
 
     
@@ -87,7 +87,17 @@ class MacaronShell(cmd.Cmd):
             self.contract_index -= 1
             self.step_index = 0
             self.refresh = True
+    
+    def do_print(self, arg):
+        '''Print the contents of a variable in scope'''
+        try:
+            if arg == '':
+                print('Usage: print VARIABLE_NAME')
+                return
 
+            print(f'{arg} = {self.get_current_step().persistant_data}')
+        except KeyError:
+            print(f'Error: Could not find variable \'{arg}\'')
 
     def do_quit(self, arg):
         '''Terminate the program.'''
@@ -115,7 +125,7 @@ class MacaronShell(cmd.Cmd):
 
     # Utility
     def preloop(self):
-        print(self.contract_trace[0][0][0])
+        self.print_current_step()
         print(self.help_message)
     
 
@@ -123,6 +133,13 @@ class MacaronShell(cmd.Cmd):
         if self.refresh:
             self.refresh = False
             print(f'{self.clear}{self.color_normal}') # Reset Terminal
-            print(self.contract_trace[self.contract_index][self.step_index][0])
+            self.print_current_step()
             print(self.help_message)
+    
+    def get_current_step(self):
+        return self.contract_trace[self.contract_index][self.step_index]
+    
+    def print_current_step(self):
+        current_step = self.get_current_step()
+        print(f'{current_step.code}\n{current_step.persistant_data}\n{current_step.debug_info}')
         

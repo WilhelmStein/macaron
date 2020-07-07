@@ -264,12 +264,13 @@ def __group_instructions(instruction_node_list): # TODO Fix certain function cal
     """Try to group bytecode instructions that correspond to the same solidity instruction"""
     
     output_list = []
+    var_values = {}
     grouped_nodes = {}
     scope = None
 
-    opcodes = {'JUMP': 0x56, 'JUMPI': 0x57, 'JUMPDEST': 0x5B}
+    opcodes = {'SLOAD': 0x54, 'SSTORE': 0x55, 'JUMP': 0x56, 'JUMPI': 0x57, 'JUMPDEST': 0x5B}
     
-    for idx, (opcode, node_wrapper) in enumerate(instruction_node_list):
+    for idx, (opcode, persistant_data, node_wrapper) in enumerate(instruction_node_list):
         # TODO Optimize
 
         # Ascertain current node's scope (if applicable) by taking a look at its lineage
@@ -287,30 +288,39 @@ def __group_instructions(instruction_node_list): # TODO Fix certain function cal
         if not scope:
             continue
         elif opcode == opcodes['JUMPI'] or opcode == opcodes['JUMP']:
-            output_list.append((scope, grouped_nodes))
+            output_list.append((scope, grouped_nodes, var_values))
+            var_values = {}
             grouped_nodes = {}
         elif opcode != opcodes['JUMPDEST']: # Do not use JUMPDEST instructions, as they only confuse the display process and their display is unnecessary
+            if opcode == opcodes['SLOAD']:
+                if node['nodeType'] == 'Identifier':
+                    var_values[node['name']] = instruction_node_list[idx + 1][1].stack_contents[0] # SLOAD [SHA], pushes VALUE at SHA on stack
+            elif opcode == opcodes['SSTORE']:
+                if node['leftHandSide']['nodeType'] == 'Identifier':
+                    var_values[node['leftHandSide']['name']] = persistant_data.stack_contents[1] # SSTORE [SHA, VALUE]
+
             grouped_nodes[node['id']] = node
 
     if grouped_nodes:
-        output_list.append((scope, grouped_nodes))
+        output_list.append((scope, grouped_nodes, var_values))
 
     return output_list
 
 
 def calculate_trace_display(stack, conn):
     """Renders a trace in human-readable format."""
+    StepWrapper = namedtuple('StepWrapper', ['code', 'persistant_data', 'debug_info'])
 
     contract_trace = []
 
     for stack_entry in stack.trace:
-        current_step = f"{color_normal}{'#'*80}\nEVM is running code at {stack_entry.address}. Reason: {stack_entry.reason}\n"
-        # print(current_step)
+        current_step_code = f"{color_normal}{'#'*80}\nEVM is running code at {stack_entry.address}. Reason: {stack_entry.reason}\n"
+        # print(current_step_code)
         res = __get_contract_from_db(stack_entry.address, conn)
 
         if res is None:
-            current_step += "Source not found in db, skipping..."
-            contract_trace.append((current_step, []))
+            current_step_code += "Source not found in db, skipping..."
+            contract_trace.append([StepWrapper(current_step_code, {}, [])])
             continue
 
         code = res['code'].encode()
@@ -325,8 +335,8 @@ def calculate_trace_display(stack, conn):
         ast, solidity_file = __compile_contract(stack_entry_folder, res)
 
         if solidity_file is None or ast is None:
-            current_step += 'AST is empty or using legacyAST, which is not supported.'
-            contract_trace.append((current_step, []))
+            current_step_code += 'AST is empty or using legacyAST, which is not supported.'
+            contract_trace.append([StepWrapper(current_step_code, {}, [])])
             continue
 
         contract = solidity_file[contract_name]
@@ -360,7 +370,7 @@ def calculate_trace_display(stack, conn):
                     if ast_node is None:
                         print(f"Could not find ast node from source mapping: {fro} : {length} : {source_index}")
                     else:
-                        instruction_node_list.append( (stack.instructions_order[stack_entry][pc], opcode, ast_node) )
+                        instruction_node_list.append( (stack.instructions_order[stack_entry][pc], opcode, stack.data_at_instruction[stack_entry][pc], ast_node) )
                         
                         
             # it's a push instruction, increment by extra size of instruction
@@ -370,14 +380,14 @@ def calculate_trace_display(stack, conn):
 
 
         # Sort the list and clip the node ordering
-        instruction_node_list = list(map(lambda a: (a[1], a[2]), sorted(instruction_node_list, key = lambda a: a[0])))
+        instruction_node_list = list(map(lambda a: (a[1], a[2], a[3]), sorted(instruction_node_list, key = lambda a: a[0])))
 
         line_index, char_index = __create_source_index(code)
         
         # Highlight executed code
         step_counter = 0
         step_trace = []
-        for idx, (scope, node_set) in enumerate(__group_instructions(instruction_node_list)):#remove_consecutives(instruction_node_list):
+        for idx, (scope, node_set, var_values) in enumerate(__group_instructions(instruction_node_list)):#remove_consecutives(instruction_node_list):
 
             scope_f, scope_r, scope_l = map(int, scope.split(':'))
             highlighted_nodes = set()
@@ -414,9 +424,9 @@ def calculate_trace_display(stack, conn):
                 source_display.append(code[i])
                 
             if node_types:
-                current_step += f"step {step_counter}:\nline: {line_index[scope_f] + 1} : {source_display.decode()}{color_normal} : {node_types}\n"
-                step_trace.append((current_step, node_types))
-                current_step = ""
+                current_step_code += f"step {step_counter}:\nline: {line_index[scope_f] + 1} : {source_display.decode()}{color_normal}\n"
+                step_trace.append(StepWrapper(current_step_code, var_values, node_types))
+                current_step_code = ""
                 step_counter += 1
             
         contract_trace.append(step_trace)

@@ -7,6 +7,7 @@ import pickle
 class EVMExecuctionStack:
     calls = {'CALL', 'CALLCODE', 'STATICCALL', 'DELEGATECALL', 'CREATE', 'CREATE2'}
     StackEntry = namedtuple('StackEntry', ['address', 'reason', 'vmstate'])
+    PersistantDataEntry = namedtuple('PersistantDataEntry', ['stack_contents', 'storage_contents'])
     
     def __init__(self):
         self.starting_transaction = ""
@@ -14,6 +15,7 @@ class EVMExecuctionStack:
         self.trace = []
         self.instructions = defaultdict(set)
         self.instructions_order = defaultdict(lambda : defaultdict(lambda : 0xFFFF))
+        self.data_at_instruction = defaultdict(lambda : defaultdict(self.PersistantDataEntry))
         self.order = 0
 
     def entry(self, address):
@@ -80,6 +82,7 @@ class EVMExecuctionStack:
 
             self.instructions[current_stack_entry].add(pc)
             self.instructions_order[current_stack_entry][pc] = min(self.instructions_order[current_stack_entry][pc], self.order)
+            self.data_at_instruction[current_stack_entry][pc] = self.PersistantDataEntry( t['stack'], t['storage'] )
             self.order += 1
 
             if t['op'] in self.calls and transaction_trace[idx + 1]['depth'] != prev_depth:
@@ -87,4 +90,5 @@ class EVMExecuctionStack:
                 self.call(t['stack'][-2][-40:], t['op'])
                 
             prev_depth = t['depth']
+
         
