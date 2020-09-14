@@ -30,7 +30,7 @@ class MacaronShell(cmd.Cmd):
 
 
     # User commands
-    def do_next(self, arg):
+    def do_next(self, arg): #TODO Fix issue with incorrect navigation
         '''Navigate to the previous step.'''
         if self.step_index == len(self.contract_trace[self.contract_index]) - 1:
             if self.contract_index == len(self.contract_trace) - 1:

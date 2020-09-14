@@ -51,6 +51,9 @@ node_children_names = { 'parameters', 'statements', 'nodes', 'arguments', 'decla
                         'condition', 'baseExpression', 'indexExpression', 'loopExpression', 'returnParameters', 'subExpression', 'eventCall', 'components',
                         'externalReferences', '_codeLength', '_addr'}
 
+opcodes = {'SHA3' : 0x20, 'MSTORE': 0x52, 'SLOAD': 0x54, 'SSTORE': 0x55, 'JUMP': 0x56, 'JUMPI': 0x57, 'JUMPDEST': 0x5B}
+
+# TODO Cleanup
 # Debug
 # validAstTypes += invalidAstTypes
 # invalidAstTypes = []
@@ -259,6 +262,51 @@ def __remove_consecutives(node_list):
     
     return output_list    
 
+def __calculate_storage_variable_key(starting_index_access_count, node, instruction_node_list, instruction_node_idx):
+    number_of_accesses = starting_index_access_count
+    var_value_key = ''
+    current_node = node['baseExpression']
+    
+    # Count how many index accesses there are
+    while True:
+        if current_node['nodeType'] == 'IndexAccess':
+            current_node = current_node['baseExpression']
+            number_of_accesses += 1
+        elif current_node['nodeType'] == 'Identifier':
+            var_value_key = current_node['name']
+            break
+        else:
+            raise Exception(f'Error: Unknown node type {current_node["nodeType"]} encountered during storage inventory.')
+
+
+    access_count = 0
+    for i in range(instruction_node_idx - 1, -1, -1):
+
+        target_opcode, target_persistant_data, target_node = instruction_node_list[i]
+
+        # relevant SHA3 instruction found, assume that first SHA3 opcode encountered is correlated with the current SSTORE opcode
+        if access_count == number_of_accesses:
+            return var_value_key
+        elif target_opcode ==  opcodes['SHA3']: #and instruction_node_list[i + 1][1].stack_contents[-1] == persistant_data.stack_contents[-1]:
+            # sha3_offset = target_persistant_data.stack_contents[-1]
+            # sha3_length = target_persistant_data.stack_contents[-2]
+
+            found_first_mstore = False
+            for j in range(i - 1, -1 , -1):
+                # search for mstores
+                target_opcode, target_persistant_data, target_node = instruction_node_list[j]
+
+                if target_opcode == opcodes['MSTORE']: #and target_persistant_data.stack_contents[-1] == sha3_offset and target_persistant_data.stack_contents[-2] == sha3_length:
+                    if found_first_mstore:
+                        # The second mstore found is the one concerning the index
+                        mstore_value = target_persistant_data.stack_contents[-2]
+                        var_value_key += f'[{int(mstore_value, 16)}]'
+                        break
+                    else:
+                        # The first mstore found is the one concerning the variable slot
+                        found_first_mstore = True
+            access_count += 1
+    
 
 def __group_instructions(instruction_node_list): # TODO Fix certain function calls not being recorded
     """Try to group bytecode instructions that correspond to the same solidity instruction"""
@@ -267,10 +315,8 @@ def __group_instructions(instruction_node_list): # TODO Fix certain function cal
     var_values = {}
     grouped_nodes = {}
     scope = None
-
-    opcodes = {'SLOAD': 0x54, 'SSTORE': 0x55, 'JUMP': 0x56, 'JUMPI': 0x57, 'JUMPDEST': 0x5B}
     
-    for idx, (opcode, persistant_data, node_wrapper) in enumerate(instruction_node_list):
+    for instruction_node_idx, (opcode, persistant_data, node_wrapper) in enumerate(instruction_node_list):
         # TODO Optimize
 
         # Ascertain current node's scope (if applicable) by taking a look at its lineage
@@ -292,12 +338,41 @@ def __group_instructions(instruction_node_list): # TODO Fix certain function cal
             var_values = {}
             grouped_nodes = {}
         elif opcode != opcodes['JUMPDEST']: # Do not use JUMPDEST instructions, as they only confuse the display process and their display is unnecessary
-            if opcode == opcodes['SLOAD']:
-                if node['nodeType'] == 'Identifier':
-                    var_values[node['name']] = instruction_node_list[idx + 1][1].stack_contents[0] # SLOAD [SHA], pushes VALUE at SHA on stack
-            elif opcode == opcodes['SSTORE']:
-                if node['leftHandSide']['nodeType'] == 'Identifier':
-                    var_values[node['leftHandSide']['name']] = persistant_data.stack_contents[1] # SSTORE [SHA, VALUE]
+
+            # If storage is accessed, record values for display purposes
+            if opcode == opcodes['SLOAD']:  # SLOAD [SHA], pushes VALUE at SHA on stack
+                # if node['nodeType'] == 'Identifier':
+                #     var_values[node['name']] = instruction_node_list[idx + 1][1].stack_contents[0]
+                # else:
+                #     print(f'Storage recording error: Unknown nodeType {node["nodeType"]}')
+                pass
+
+            elif opcode == opcodes['SSTORE']: # SSTORE [SHA, VALUE]
+                if node['nodeType'] == 'Assignment':
+                    lhs = node['leftHandSide']
+
+                    if lhs['nodeType'] == 'Identifier':
+                        var_values[lhs['name']] = persistant_data.stack_contents[-2]
+                    elif lhs['nodeType'] == 'MemberAccess':
+                        lhsExpr = lhs['expression']
+
+                        if lhsExpr['nodeType'] == 'Identifier':
+                            var_values[f'{lhsExpr["name"]}.{lhs["memberName"]}'] = persistant_data.stack_contents[-2]
+                        elif lhsExpr['nodeType'] == 'IndexAccess':
+                            #TODO Iterate backwards through the instruction chain and get the indexing (attention to multi-dim arrays)
+                            var_values[f'{__calculate_storage_variable_key(1, lhsExpr, instruction_node_list, instruction_node_idx)}.{lhs["memberName"]}'] = persistant_data.stack_contents[-2]
+
+                        else:
+                            print(f'In leftHandSide node \'{lhs["nodeType"]}\':\n\tUnknown expression type \'{lhsExpr["nodeType"]}\'')
+
+                    elif lhs['nodeType'] == 'IndexAccess':
+                        lhsExpr = lhs['baseExpression']
+                        var_values[__calculate_storage_variable_key(1, lhsExpr, instruction_node_list, instruction_node_idx)] = persistant_data.stack_contents[-2]
+                    else:
+                        print(f'In assignment node \'{node["nodeType"]}\':\n\tUnknown leftHandSide type \'{lhs["nodeType"]}\'')
+                else:
+                    print(f'Unknown node type \'{node["nodeType"]}\'')
+                
 
             grouped_nodes[node['id']] = node
 
@@ -437,22 +512,23 @@ def calculate_trace_display(stack, conn):
 if __name__ == '__main__':
     try:
         # Attacks
-        # transaction = '0x0ec3f2488a93839524add10ea229e773f6bc891b4eb4794c3337d4495263790b'    # DAO Attack
+        # transaction = '0x0ec3f2488a93839524add10ea229e773f6bc891b4eb4794c3337d4495263790b'    # DAO Attack - Compilation Error
         # transaction = '0x77e93eaa08349fff1c68025e77a2d95e3e88f673d33c5501664e958d8727d4a9'    # Parity Attack - Compilation Error
         # transaction = '0xd6c24da4e17aa18db03f9df46f74f119fa5c2314cb1149cd3f88881ddc475c5a'    # DAOSTACK Attack - Self Destructed :(
         # transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack - Compilation Error
 
         # Other Tests
-        # transaction = '0x5c932a5c59f9691ca9f334fe744c00f9aabe64991ade8fea52a6e1b22a793664'    # Fomo3D
+        transaction = '0x5c932a5c59f9691ca9f334fe744c00f9aabe64991ade8fea52a6e1b22a793664'    # Fomo3D
         # transaction = '0x7e8738e2fe6e67ac07b003fe23e4961b0677d4ef345d141647cc407b915d6927'    # Sol Wallet - Compilation Error
         # transaction = '0x129da6f54480b27d49411af82db7da5c98cf8f455508bc7e87838e938d4d0ef2'    # SafeMath
-        transaction = '0x26df3b770389b8f298446a25404d05402065bc8fe00ff5f6c0af6912c2c46947'    # E2D
+        # transaction = '0x26df3b770389b8f298446a25404d05402065bc8fe00ff5f6c0af6912c2c46947'    # E2D
         # transaction = '0xa2f866c2b391c9d35d8f18edb006c9a872c0014b992e4b586cc2f11dc2b24ebd'    # test1
         # transaction = '0xc1f534b03e5d4840c091c54224c3381b892b8f1a2869045f49913f3cfaf95ba7'    # Million Money
         # transaction = '0x51f37d7b41e6864d1190d8f596e956501d9f4e0f8c598dbcbbc058c10b25aa3b'    # Dust
         # transaction = '0x3f0a309ebbc5642ec18047fb902c383b33e951193bda6402618652e9234c9abb'    # Tokens
         # transaction = '0x6aec28ad65052132bf04c0ed621e24c007b2476fe6810389232d3ac4222c0ccc'    # Doubleway
         # transaction = '0xa228e903a5d751e4268a602bd6b938392272e4024e2071f7cd4a479e8125c370'    # Saturn Network 2 - Compilation Error
+        # transaction = '0xf3e1b43611423c39d2839dc95d70090ba1ae91d66a8303ddad842e4bb9ed4793'    # Chess Coin
 
         conn = pymysql.connect(
             host="127.0.0.1",
