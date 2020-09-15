@@ -10,7 +10,7 @@ class MacaronShell(cmd.Cmd):
     prompt = '>:'
     step_index = contract_index = 0
     contract_trace = []
-    help_message = 'Controls: (n)ext step - (p)revious step - next function call (nf) - previous function call (pf) - next contract (nc) - previous contract (pc) - (q)uit'
+    help_message = 'Controls: (n)ext step - (p)revious step - next function call (nf) - previous function call (pf) - next contract (nc) - previous contract (pc) - print \'storage_var\' - (q)uit'
 
     refresh = False
 
@@ -30,7 +30,7 @@ class MacaronShell(cmd.Cmd):
 
 
     # User commands
-    def do_next(self, arg): #TODO Fix issue with incorrect navigation
+    def do_next(self, arg):
         '''Navigate to the previous step.'''
         if self.step_index == len(self.contract_trace[self.contract_index]) - 1:
             if self.contract_index == len(self.contract_trace) - 1:
@@ -48,7 +48,9 @@ class MacaronShell(cmd.Cmd):
             if self.contract_index == 0:
                 print('Reached the start of the trace.')
             else:
-                self.do_prev_contract(arg)
+                self.contract_index -= 1
+                self.step_index = len(self.contract_trace[self.contract_index]) - 1
+                self.refresh = True
         else:
             self.step_index -= 1
             self.refresh = True
@@ -79,6 +81,7 @@ class MacaronShell(cmd.Cmd):
             self.step_index = 0
             self.refresh = True
 
+
     def do_prev_contract(self, arg):
         '''Navigate to the previous contract'''
         if self.contract_index == 0:
@@ -88,6 +91,7 @@ class MacaronShell(cmd.Cmd):
             self.step_index = 0
             self.refresh = True
     
+
     def do_print(self, arg):
         '''Print the contents of a variable in scope'''
         try:
@@ -95,9 +99,10 @@ class MacaronShell(cmd.Cmd):
                 print('Usage: print VARIABLE_NAME')
                 return
 
-            print(f'{arg} = {self.get_current_step().persistant_data}')
+            print(f'{arg} = {self.get_current_step().persistant_data[arg]}')
         except KeyError:
             print(f'Error: Could not find variable \'{arg}\'')
+
 
     def do_quit(self, arg):
         '''Terminate the program.'''

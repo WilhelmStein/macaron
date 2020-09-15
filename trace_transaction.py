@@ -529,6 +529,7 @@ def calculate_trace_display(stack, conn):
         
     return contract_trace
 
+
 # Test start
 if __name__ == '__main__':
     try:
