@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # connect to db, make sure there is an ssh tunnel:
 #ssh contract-library.com -L 3307:127.0.0.1:3306 -N
-import pymysql
+
 import pandas as pd
 import dill
 import solcx
@@ -9,11 +9,9 @@ import solcx.install
 from collections import defaultdict, OrderedDict, Mapping, namedtuple
 from itertools import chain
 from copy import deepcopy
-import evm_stack
 import os.path
 import pickle
 import functools
-from trace_shell import MacaronShell
 
 
 # Globals
@@ -352,6 +350,8 @@ def __group_instructions(instruction_node_list): # TODO Fix certain function cal
                 pass
 
             elif opcode == opcodes['SSTORE']: # SSTORE [SHA, VALUE]
+                # TODO Check if arrays are registered correctly
+                # TODO Make stored values more meaningful
                 if node['nodeType'] == 'Assignment':
                     lhs = node['leftHandSide']
 
@@ -506,7 +506,6 @@ def calculate_trace_display(stack, conn):
             
             # Unless there was nothing to highlight, wrap all the data in a single step for the contract trace display
             if node_types:
-                node_types += [stack_entry.address, stack_entry.reason] # debug
                 current_step_code += f"step {step_counter}:\nline: {line_index[scope_f] + 1} : {source_display.decode()}{color_normal}\n"
                 step_trace.append(StepWrapper(current_step_code, var_values, node_types))
                 current_step_code = ""
@@ -528,52 +527,3 @@ def calculate_trace_display(stack, conn):
         pass
         
     return contract_trace
-
-
-# Test start
-if __name__ == '__main__':
-    try:
-        # TODO Create an alias system so that the user won't have to type the whole transaction
-        # Attacks
-        # transaction = '0x0ec3f2488a93839524add10ea229e773f6bc891b4eb4794c3337d4495263790b'    # DAO Attack - Compilation Error
-        # transaction = '0x77e93eaa08349fff1c68025e77a2d95e3e88f673d33c5501664e958d8727d4a9'    # Parity Attack - Compilation Error
-        # transaction = '0xd6c24da4e17aa18db03f9df46f74f119fa5c2314cb1149cd3f88881ddc475c5a'    # DAOSTACK Attack - Self Destructed :(
-        # transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack - Compilation Error
-
-        # Other Tests
-        transaction = '0x5c932a5c59f9691ca9f334fe744c00f9aabe64991ade8fea52a6e1b22a793664'    # Fomo3D
-        # transaction = '0x7e8738e2fe6e67ac07b003fe23e4961b0677d4ef345d141647cc407b915d6927'    # Sol Wallet - Compilation Error
-        # transaction = '0x129da6f54480b27d49411af82db7da5c98cf8f455508bc7e87838e938d4d0ef2'    # SafeMath
-        # transaction = '0x26df3b770389b8f298446a25404d05402065bc8fe00ff5f6c0af6912c2c46947'    # E2D
-        # transaction = '0xa2f866c2b391c9d35d8f18edb006c9a872c0014b992e4b586cc2f11dc2b24ebd'    # test1
-        # transaction = '0xc1f534b03e5d4840c091c54224c3381b892b8f1a2869045f49913f3cfaf95ba7'    # Million Money
-        # transaction = '0x51f37d7b41e6864d1190d8f596e956501d9f4e0f8c598dbcbbc058c10b25aa3b'    # Dust
-        # transaction = '0x3f0a309ebbc5642ec18047fb902c383b33e951193bda6402618652e9234c9abb'    # Tokens
-        # transaction = '0x6aec28ad65052132bf04c0ed621e24c007b2476fe6810389232d3ac4222c0ccc'    # Doubleway
-        # transaction = '0xa228e903a5d751e4268a602bd6b938392272e4024e2071f7cd4a479e8125c370'    # Saturn Network 2 - Compilation Error
-        # transaction = '0xf3e1b43611423c39d2839dc95d70090ba1ae91d66a8303ddad842e4bb9ed4793'    # Chess Coin
-
-        conn = pymysql.connect(
-            host="127.0.0.1",
-            port=int(3307),
-            user="tracer",
-            passwd="a=$G5)Z]vqY6]}w{",
-            db="gigahorse",
-            charset='utf8mb4')
-
-        stack = evm_stack.EVMExecuctionStack()
-        stack.import_transaction(transaction)
-        step_trace = calculate_trace_display(stack, conn)
-
-        navigator = MacaronShell(step_trace)
-        navigator.cmdloop()
-    except Exception:
-        import pdb
-        import traceback
-        import sys
-
-        extype, value, tb = sys.exc_info()
-        traceback.print_exc()
-
-        pdb.post_mortem(tb)
-        
