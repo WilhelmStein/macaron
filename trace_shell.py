@@ -16,7 +16,7 @@ class MacaronShell(cmd.Cmd):
 
     def __init__(self, contract_trace):
         cmd.Cmd.__init__(self)
-        self.contract_trace = copy.deepcopy(contract_trace)
+        self.contract_trace = [contract_wrapper.steps for contract_wrapper in contract_trace]
         self.aliases = {
             'n' : self.do_next,
             'p' : self.do_prev,

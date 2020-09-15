@@ -8,6 +8,7 @@ import solcx
 import solcx.install
 from collections import defaultdict, OrderedDict, Mapping, namedtuple
 from itertools import chain
+from copy import deepcopy
 import evm_stack
 import os.path
 import pickle
@@ -262,7 +263,9 @@ def __remove_consecutives(node_list):
     
     return output_list    
 
+
 def __calculate_storage_variable_key(starting_index_access_count, node, instruction_node_list, instruction_node_idx):
+    """Calculate the storage variable name (key) for assigment expressions whose left hand expression contains indexing (array or map)"""
     number_of_accesses = starting_index_access_count
     var_value_key = ''
     current_node = node['baseExpression']
@@ -345,6 +348,7 @@ def __group_instructions(instruction_node_list): # TODO Fix certain function cal
                 #     var_values[node['name']] = instruction_node_list[idx + 1][1].stack_contents[0]
                 # else:
                 #     print(f'Storage recording error: Unknown nodeType {node["nodeType"]}')
+                # As long as SSTORE instructions are recorded successfully, SLOADs need not be taken into account
                 pass
 
             elif opcode == opcodes['SSTORE']: # SSTORE [SHA, VALUE]
@@ -359,7 +363,6 @@ def __group_instructions(instruction_node_list): # TODO Fix certain function cal
                         if lhsExpr['nodeType'] == 'Identifier':
                             var_values[f'{lhsExpr["name"]}.{lhs["memberName"]}'] = persistant_data.stack_contents[-2]
                         elif lhsExpr['nodeType'] == 'IndexAccess':
-                            #TODO Iterate backwards through the instruction chain and get the indexing (attention to multi-dim arrays)
                             var_values[f'{__calculate_storage_variable_key(1, lhsExpr, instruction_node_list, instruction_node_idx)}.{lhs["memberName"]}'] = persistant_data.stack_contents[-2]
 
                         else:
@@ -385,6 +388,7 @@ def __group_instructions(instruction_node_list): # TODO Fix certain function cal
 def calculate_trace_display(stack, conn):
     """Renders a trace in human-readable format."""
     StepWrapper = namedtuple('StepWrapper', ['code', 'persistant_data', 'debug_info'])
+    ContractWrapper = namedtuple('ContractWrapper', ['address', 'reason', 'steps'])
 
     contract_trace = []
 
@@ -395,7 +399,7 @@ def calculate_trace_display(stack, conn):
 
         if res is None:
             current_step_code += "Source not found in db, skipping..."
-            contract_trace.append([StepWrapper(current_step_code, {}, [])])
+            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(current_step_code, {}, [])] ))
             continue
 
         code = res['code'].encode()
@@ -411,7 +415,7 @@ def calculate_trace_display(stack, conn):
 
         if solidity_file is None or ast is None:
             current_step_code += 'AST is empty or using legacyAST, which is not supported.'
-            contract_trace.append([StepWrapper(current_step_code, {}, [])])
+            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(current_step_code, {}, [])] ))
             continue
 
         contract = solidity_file[contract_name]
@@ -462,19 +466,20 @@ def calculate_trace_display(stack, conn):
         # Highlight executed code
         step_counter = 0
         step_trace = []
-        for idx, (scope, node_set, var_values) in enumerate(__group_instructions(instruction_node_list)):#remove_consecutives(instruction_node_list):
+        for idx, (scope, node_set, var_values) in enumerate(__group_instructions(instruction_node_list)):
 
             scope_f, scope_r, scope_l = map(int, scope.split(':'))
             highlighted_nodes = set()
             highlighted_indices = set()
             node_types = []
             
+            # Choose what to highlight 
             for _, node in node_set.items():
             
                 if node['nodeType'] in validAstTypes:
                     node_types.append(node['nodeType'])
 
-                    if node['id'] not in highlighted_nodes: #and highlight_node_family(node, node_set):
+                    if node['id'] not in highlighted_nodes:
                         highlighted_nodes.add(node['id'])
                         node_f, node_r, node_l = map(int, node['src'].split(':'))
                         highlighted_indices.update(range(node_f, node_f + node_r))
@@ -484,6 +489,7 @@ def calculate_trace_display(stack, conn):
             
             source_display = bytearray()
 
+            # Apply highlighting colors
             curr_color = color_normal
             for i in range(scope_f, scope_f + scope_r):
                 if i in highlighted_indices:
@@ -497,20 +503,36 @@ def calculate_trace_display(stack, conn):
                         source_display += curr_color.encode()
 
                 source_display.append(code[i])
-                
+            
+            # Unless there was nothing to highlight, wrap all the data in a single step for the contract trace display
             if node_types:
+                node_types += [stack_entry.address, stack_entry.reason] # debug
                 current_step_code += f"step {step_counter}:\nline: {line_index[scope_f] + 1} : {source_display.decode()}{color_normal}\n"
                 step_trace.append(StepWrapper(current_step_code, var_values, node_types))
                 current_step_code = ""
                 step_counter += 1
             
-        contract_trace.append(step_trace)
+        contract_trace.append(ContractWrapper(stack_entry.address , stack_entry.reason.split(' '), step_trace))
+
+    # After all the trace visualization data are calculated, make sure that the contract storage data are inherited downwards, moving through the contract
+    storage_per_contract = defaultdict(dict)
+
+    for contract in contract_trace:
+        storage_until_now = storage_per_contract[contract.address]
+
+        for step in contract.steps:
+            step.persistant_data.update(storage_until_now)
+            storage_until_now = deepcopy(step.persistant_data)
+
+        storage_per_contract[contract.address] = deepcopy(storage_until_now)
+        pass
         
     return contract_trace
 
 # Test start
 if __name__ == '__main__':
     try:
+        # TODO Create an alias system so that the user won't have to type the whole transaction
         # Attacks
         # transaction = '0x0ec3f2488a93839524add10ea229e773f6bc891b4eb4794c3337d4495263790b'    # DAO Attack - Compilation Error
         # transaction = '0x77e93eaa08349fff1c68025e77a2d95e3e88f673d33c5501664e958d8727d4a9'    # Parity Attack - Compilation Error
