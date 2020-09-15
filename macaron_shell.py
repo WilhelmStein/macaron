@@ -14,9 +14,9 @@ class MacaronShell(cmd.Cmd):
 
     refresh = False
 
-    def __init__(self, contract_trace):
+    def __init__(self, transaction_address = None):
         cmd.Cmd.__init__(self)
-        self.contract_trace = [contract_wrapper.steps for contract_wrapper in contract_trace]
+        self.contract_trace = []
         self.aliases = {
             'n' : self.do_next,
             'p' : self.do_prev,
@@ -28,10 +28,14 @@ class MacaronShell(cmd.Cmd):
             'r' : self.do_refresh
         }
 
+        if transaction_address:
+            self.contract_trace = [contract_wrapper.steps for contract_wrapper in self.prepare_transaction(transaction_address)]
+
 
     # Navigation commands
+    # TODO bounds check for when no transaction has been loaded
     def do_next(self, arg):
-        '''Navigate to the previous step.'''
+        '''Navigate to the next step.'''
         if self.step_index == len(self.contract_trace[self.contract_index]) - 1:
             if self.contract_index == len(self.contract_trace) - 1:
                 print('Reached the end of the trace.')
@@ -43,7 +47,7 @@ class MacaronShell(cmd.Cmd):
     
     
     def do_prev(self, arg):
-        '''Navigate to the next step'''
+        '''Navigate to the previous step'''
         if self.step_index == 0:
             if self.contract_index == 0:
                 print('Reached the start of the trace.')
@@ -112,41 +116,37 @@ class MacaronShell(cmd.Cmd):
         except:
             print('Usage: create_alias TRANSACTION_ALIAS TRANSACTION_ADDRESS')
 
-        try:
-            with open('transaction_aliases.pkl', 'rb') as aliases_file:
-                aliases = pickle.load(aliases_file)
-                if aliases is None:
-                    aliases = {}
-        except:
-            aliases = {}
+        aliases = self.load_aliases()
 
         if transaction_alias in aliases:
             if input(f'Transaction alias \'{transaction_alias}\' already exists. Do you want to overwrite? Y/N\n{self.prompt}') == 'Y':
                 aliases[transaction_alias] = transaction_address
+                print('\nOverwriting alias...\n')
+            else:
+                print('\nWill not overwrite alias\n')
         else:
             aliases[transaction_alias] = transaction_address
 
         with open('transaction_aliases.pkl', 'wb+') as aliases_file:
             pickle.dump(aliases, aliases_file)
-            print('\nSuccessfully written to file\n')
 
 
-    # def do_load_transaction(self, arg):
-    #     '''Load a transaction from alias or address'''
-    #     with open('transaction_aliases.pkl', 'r') as aliases:
+    def do_load_transaction(self, arg):
+        '''Load a transaction from alias or address'''
+        if arg[0:2] == "0x":
+            self.contract_trace = [contract_wrapper.steps for contract_wrapper in self.prepare_transaction(arg)]
+        else:
+            aliases = self.load_aliases()
+            
+            try:
+                self.contract_trace = [contract_wrapper.steps for contract_wrapper in self.prepare_transaction(aliases[arg])]
+            except KeyError:
+                print(f'Error: Could not find transaction alias \'{arg}\'')
 
 
     def do_list_aliases(self, arg):
         '''Display all current aliases'''
-        try:
-            with open('transaction_aliases.pkl', 'rb') as aliases_file:
-                aliases = pickle.load(aliases_file)
-                if aliases is None:
-                    aliases = {}
-        except:
-            print('Error: Could not open alias file')
-            return
-        
+        aliases = self.load_aliases()
         for alias, value in aliases.items():
             print(f'{alias} : {value}')
             
@@ -177,8 +177,29 @@ class MacaronShell(cmd.Cmd):
 
 
     # Utility
+    def prepare_transaction(self, transaction_address):
+        '''Calculate all transaction display data'''
+        stack = evm_stack.EVMExecuctionStack()
+        stack.import_transaction(transaction)
+        self.contract_index = self.step_index = 0
+        return calculate_trace_display(stack, conn)
+
+
+    def load_aliases(self):
+        try:
+            with open('transaction_aliases.pkl', 'rb') as aliases_file:
+                return pickle.load(aliases_file)
+        except:
+            print('Error: Could not open alias file')
+            return
+
+
     def preloop(self):
-        self.print_current_step()
+        if self.contract_trace:
+            self.print_current_step()
+        else:
+            print(f'{self.clear}{self.color_normal}') # Reset Terminal
+
         print(self.help_message)
     
 
@@ -189,9 +210,11 @@ class MacaronShell(cmd.Cmd):
             self.print_current_step()
             print(self.help_message)
     
+
     def get_current_step(self):
         return self.contract_trace[self.contract_index][self.step_index]
     
+
     def print_current_step(self):
         current_step = self.get_current_step()
         print(f'{current_step.code}\n{current_step.persistant_data}\n{current_step.debug_info}')
@@ -230,12 +253,7 @@ if __name__ == '__main__':
         # transaction = '0xf3e1b43611423c39d2839dc95d70090ba1ae91d66a8303ddad842e4bb9ed4793'    # Chess Coin
 
 
-
-        stack = evm_stack.EVMExecuctionStack()
-        stack.import_transaction(transaction)
-        step_trace = calculate_trace_display(stack, conn)
-
-        navigator = MacaronShell(step_trace)
+        navigator = MacaronShell()
         navigator.cmdloop()
     except Exception:
         import pdb
