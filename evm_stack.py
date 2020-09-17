@@ -44,9 +44,9 @@ class EVMExecuctionStack:
     def head(self):
         return self.trace[-1]
     
-    def import_transaction(self, transaction):
+    def import_transaction(self, transaction, rpc_endpoint):
 
-        self.entry(get_starting_contract(transaction)[2:])
+        self.entry(get_starting_contract(transaction, rpc_endpoint)[2:])
 
         if not os.path.exists('traces'):
             os.makedirs('traces')
@@ -62,7 +62,7 @@ class EVMExecuctionStack:
                 with open(f"{self.starting_transaction}/trace.pkl","rb") as f:
                     transaction_trace = pickle.load(f)
             else:
-                transaction_trace = get_trace(transaction)['result']['structLogs']
+                transaction_trace = get_trace(transaction, rpc_endpoint)['result']['structLogs']
 
                 with open(f"{self.starting_transaction}/trace.pkl","wb") as f:
                     pickle.dump(transaction_trace,f)

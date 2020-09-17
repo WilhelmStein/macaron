@@ -14,8 +14,10 @@ class MacaronShell(cmd.Cmd):
 
     refresh = False
 
-    def __init__(self, transaction_address = None):
+    def __init__(self, transaction_address = None, rpc_endpoint = 'http://localhost:8545'):
         cmd.Cmd.__init__(self)
+
+        self.rpc_endpoint = rpc_endpoint
         self.contract_trace = []
         self.aliases = {
             'n' : self.do_next,
@@ -31,6 +33,14 @@ class MacaronShell(cmd.Cmd):
         if transaction_address:
             self.contract_trace = [contract_wrapper.steps for contract_wrapper in self.prepare_transaction(transaction_address)]
 
+
+    # Connection Commands
+    def do_set_rpc_endpoint(self, arg):
+        try:
+            self.rpc_endpoint, self.endpoint_secret = arg.split(':')
+            print(f'Rpc endpoint successfully changed to \'{self.rpc_endpoint}\'')
+        except Exception:
+            print('Usage: set_rpc_endpoint ENDPOINT_URL:ENDPOINT_SECRET (ENDPOINT_URL: if no secret)')
 
     # Navigation commands
     # TODO bounds check for when no transaction has been loaded
@@ -180,7 +190,7 @@ class MacaronShell(cmd.Cmd):
     def prepare_transaction(self, transaction_address):
         '''Calculate all transaction display data'''
         stack = evm_stack.EVMExecuctionStack()
-        stack.import_transaction(transaction)
+        stack.import_transaction(transaction, self.rpc_endpoint)
         self.contract_index = self.step_index = 0
         return calculate_trace_display(stack, conn)
 
@@ -222,6 +232,11 @@ class MacaronShell(cmd.Cmd):
 
 if __name__ == '__main__':
     try:
+
+        # if len(sys.argv) != 2:
+        #     raise Exception('Usage: python3 macaron_shell.py TRANSACTION')
+
+
         conn = pymysql.connect(
             host="127.0.0.1",
             port=int(3307),
@@ -229,9 +244,6 @@ if __name__ == '__main__':
             passwd="a=$G5)Z]vqY6]}w{",
             db="gigahorse",
             charset='utf8mb4')
-
-        # if len(sys.argv) != 2:
-        #     raise Exception('Usage: python3 macaron_shell.py TRANSACTION')
 
         # Attacks
         # transaction = '0x0ec3f2488a93839524add10ea229e773f6bc891b4eb4794c3337d4495263790b'    # DAO Attack - Compilation Error
@@ -253,7 +265,7 @@ if __name__ == '__main__':
         # transaction = '0xf3e1b43611423c39d2839dc95d70090ba1ae91d66a8303ddad842e4bb9ed4793'    # Chess Coin
 
 
-        navigator = MacaronShell()
+        navigator = MacaronShell(transaction, 'https://mainnet.infura.io/v3/2cba9e1aa07741c2b91ab3a7582982fb')
         navigator.cmdloop()
     except Exception:
         import pdb
