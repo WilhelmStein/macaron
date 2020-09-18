@@ -1,7 +1,7 @@
 import web3
 import requests
 import json
-
+#TODO Add security authentication options
 def get_trace(hash, rpc_endpoint):
     payload = {"jsonrpc":"2.0","id":8,"method":"debug_traceTransaction", "params":
                [ hash, {"disableStorage":False,"disableMemory":True,"disableStack":False,"fullStorage":False}

@@ -10,14 +10,15 @@ class MacaronShell(cmd.Cmd):
     prompt = '>:'
     step_index = contract_index = 0
     contract_trace = []
-    help_message = 'Controls: (n)ext step - (p)revious step - next function call (nf) - previous function call (pf) - next contract (nc) - previous contract (pc) - print \'storage_var\' - (q)uit'
+    help_message = 'Navigation: (n)ext step - (p)revious step - next function call (nf) - previous function call (pf) - next contract (nc) - previous contract (pc) - help'
 
     refresh = False
 
-    def __init__(self, transaction_address = None, rpc_endpoint = 'http://localhost:8545'):
+    def __init__(self, transaction_address = None, rpc_endpoint = 'http://localhost:8545'): #TODO Add instant alias loading
         cmd.Cmd.__init__(self)
 
         self.rpc_endpoint = rpc_endpoint
+        self.current_transaction = transaction_address
         self.contract_trace = []
         self.aliases = {
             'n' : self.do_next,
@@ -30,8 +31,7 @@ class MacaronShell(cmd.Cmd):
             'r' : self.do_refresh
         }
 
-        if transaction_address:
-            self.contract_trace = [contract_wrapper.steps for contract_wrapper in self.prepare_transaction(transaction_address)]
+        self.reload_transaction()
 
 
     # Connection Commands
@@ -119,22 +119,24 @@ class MacaronShell(cmd.Cmd):
 
 
     # Filesystem commands
-    def do_create_alias(self, arg):
+    def do_create_transaction_alias(self, arg):
         '''Create an alias for a transaction'''
         try:
             transaction_alias, transaction_address = arg.split(' ')
         except:
-            print('Usage: create_alias TRANSACTION_ALIAS TRANSACTION_ADDRESS')
+            print('Usage: create_transaction_alias TRANSACTION_ALIAS TRANSACTION_ADDRESS')
+            return
 
-        aliases = self.load_aliases()
+        aliases = self.load_pickle('transaction_aliases.pkl', 'rb')
 
-        if transaction_alias in aliases:
+        if aliases and transaction_alias in aliases:
             if input(f'Transaction alias \'{transaction_alias}\' already exists. Do you want to overwrite? Y/N\n{self.prompt}') == 'Y':
                 aliases[transaction_alias] = transaction_address
                 print('\nOverwriting alias...\n')
             else:
                 print('\nWill not overwrite alias\n')
         else:
+            aliases = {}
             aliases[transaction_alias] = transaction_address
 
         with open('transaction_aliases.pkl', 'wb+') as aliases_file:
@@ -146,7 +148,7 @@ class MacaronShell(cmd.Cmd):
         if arg[0:2] == "0x":
             self.contract_trace = [contract_wrapper.steps for contract_wrapper in self.prepare_transaction(arg)]
         else:
-            aliases = self.load_aliases()
+            aliases = self.load_pickle('transaction_aliases.pkl', 'rb')
             
             try:
                 self.contract_trace = [contract_wrapper.steps for contract_wrapper in self.prepare_transaction(aliases[arg])]
@@ -156,10 +158,59 @@ class MacaronShell(cmd.Cmd):
 
     def do_list_aliases(self, arg):
         '''Display all current aliases'''
-        aliases = self.load_aliases()
-        for alias, value in aliases.items():
-            print(f'{alias} : {value}')
-            
+        transaction_aliases = self.load_pickle('transaction_aliases.pkl', 'rb')
+
+        if transaction_aliases:
+            print('Transaction Aliases:')
+            for alias, value in transaction_aliases.items():
+                print(f'\t{alias} : {value}')
+        else:
+            print('\tNone')
+        
+
+        endpoint_aliases = self.load_pickle('endpoint_aliases.pkl', 'rb')
+        print('Endpoint Aliases:')
+        if endpoint_aliases:
+            for alias, value in endpoint_aliases.items():
+                print(f'\t{alias} : {value}')
+        else:
+            print('\tNone')
+    
+
+    def do_create_endpoint_alias(self, arg):
+        '''Create a new alias for an endpoint'''
+        try:
+            endpoint_alias, endpoint_address, endpoint_secret = arg.split(' ')
+        except:
+            print('Usage: create_endpoint_alias ENDPOINT_ALIAS ENDPOINT_ADDRESS ENDPOINT_SECRET')
+            return
+
+        aliases = self.load_pickle('endpoint_aliases.pkl', 'rb')
+
+        if aliases and endpoint_alias in aliases:
+            if input(f'Endpoint alias \'{endpoint_alias}\' already exists. Do you want to overwrite? Y/N\n{self.prompt}') == 'Y':
+                aliases[endpoint_alias] = (endpoint_address,endpoint_secret)
+                print('\nOverwriting alias...\n')
+            else:
+                print('\nWill not overwrite alias\n')
+        else:
+            aliases = {}
+            aliases[endpoint_alias] = (endpoint_address,endpoint_secret)
+
+        with open('endpoint_aliases.pkl', 'wb+') as aliases_file:
+            pickle.dump(aliases, aliases_file)
+
+    
+    def do_load_endpoint(self, arg):
+        '''Load an endpoint from the alias file'''
+        
+        aliases = self.load_pickle('endpoint_aliases.pkl', 'rb')
+
+        try:
+            self.rpc_endpoint, self.endpoint_secret = aliases[arg]
+        except KeyError:
+            print(f'Error: Could not find endpoint alias \'{arg}\'')
+
 
     # Misc commands
     def do_quit(self, arg):
@@ -195,13 +246,19 @@ class MacaronShell(cmd.Cmd):
         return calculate_trace_display(stack, conn)
 
 
-    def load_aliases(self):
+    def load_pickle(self, filename, open_method):
         try:
-            with open('transaction_aliases.pkl', 'rb') as aliases_file:
-                return pickle.load(aliases_file)
+            with open(filename, open_method) as file:
+                return pickle.load(file)
         except:
-            print('Error: Could not open alias file')
             return
+
+
+    def reload_transaction(self):
+        if self.current_transaction:
+            self.contract_trace = [contract_wrapper.steps for contract_wrapper in self.prepare_transaction(self.current_transaction)]
+        else:
+            print('No transaction currently loaded.')
 
 
     def preloop(self):
@@ -264,8 +321,11 @@ if __name__ == '__main__':
         # transaction = '0xa228e903a5d751e4268a602bd6b938392272e4024e2071f7cd4a479e8125c370'    # Saturn Network 2 - Compilation Error
         # transaction = '0xf3e1b43611423c39d2839dc95d70090ba1ae91d66a8303ddad842e4bb9ed4793'    # Chess Coin
 
+        # Ropsten Tests
+        # transaction = '0xebed482d1f5c925265d889fa6200225759a6e816469f4427cfee25a7a7daca92' # mapping.sol
 
-        navigator = MacaronShell(transaction, 'https://mainnet.infura.io/v3/2cba9e1aa07741c2b91ab3a7582982fb')
+
+        navigator = MacaronShell(transaction)
         navigator.cmdloop()
     except Exception:
         import pdb
