@@ -1,9 +1,12 @@
+#!/usr/bin/env python3
+
 import cmd, sys, copy, csv, pickle, functools, pymysql, evm_stack
 from trace_transaction import calculate_trace_display
 
 class MacaronShell(cmd.Cmd):
 
     color_normal = '\033[31m\033[40m'
+    color_reset = '\033[m'
     clear = '\033c\033'
 
     intro = f'{color_normal}Macaron Navigator V 0.5'
@@ -215,6 +218,7 @@ class MacaronShell(cmd.Cmd):
     # Misc commands
     def do_quit(self, arg):
         '''Terminate the program.'''
+        print(self.color_reset) # Reset terminal colors
         exit(0)
 
 
@@ -331,6 +335,7 @@ if __name__ == '__main__':
         import pdb
         import traceback
 
+        print(MacaronShell.color_reset) # Reset terminal colors
         extype, value, tb = sys.exc_info()
         traceback.print_exc()
 

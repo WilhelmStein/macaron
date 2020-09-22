@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # connect to db, make sure there is an ssh tunnel:
 #ssh contract-library.com -L 3307:127.0.0.1:3306 -N
 
