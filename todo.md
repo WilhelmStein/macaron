@@ -1,26 +1,33 @@
 # Macaron Explorer
 
-## Security Flaw Detection
-
-- [ ] Reentrancy Calls
-- [ ] Calling function twice with same arguments
-- [ ] ...
-
-## Navigator
-- [ ] Map bytecode to source
+- [x] Map bytecode to source
   - [x] Map bytecode to AST nodes
   - [x] Map AST Nodes to source
-  - [ ] Investigate source mapping errors
 
 - [ ] Contract data visualization
-  - [ ] Contract Storage 
-    - [ ] Reverse engineer Bytecode on storage statements
-    - [ ] Reverse engineer Bytecode on load statements
-  - [ ] Contract Memory
+  - [ ] Contract Storage
+    - [ ] Create solidity evaluator to check continuity
+    - [ ] Reverse engineer Bytecode on sstore instructions
+      - [ ] Arrays
+      - [x] Mappings 
+      - [x] Identifiers
+    - [ ] Reverse engineer Bytecode on sload instructions
+      - [ ] Arrays
+      - [ ] Mappings 
+      - [ ] Identifiers
+  - [ ] Call data
+  - [ ] Higher Level View (Function call level)
 
 - [ ] Implement Navigation
   - [x]  Group mappings into steps
-  - [ ]  Shell UI implementation
-    - [x] Basic Navigation
-    - [ ] Advanced Navigation 
+  - [x]  Shell UI implementation
+  - [x] Basic Navigation
+  - [ ] Step Up Functionality
+
+- [ ] Polishing
+  - [x] Easier deployment
+  - [x] Aliasing system  
+  - [ ] Scroll functionality
+  - [ ] Better display of storage contents
+  - [ ] Fix bytecode to source mismappings
 

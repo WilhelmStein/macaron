@@ -26,6 +26,7 @@ class MacaronShell(cmd.Cmd):
         self.aliases = {
             'n' : self.do_next,
             'p' : self.do_prev,
+            'so': self.do_step_out,
             'nf' : self.do_next_func_call,
             'pf' : self.do_prev_func_call,
             'nc' : self.do_next_contract,
@@ -71,6 +72,46 @@ class MacaronShell(cmd.Cmd):
         else:
             self.step_index -= 1
             self.refresh = True
+
+        
+    def do_step_out(self, arg):
+        '''Step out of the function currently in'''
+        current_id = self.contract_trace[self.contract_index][self.step_index].function_id
+        function_id = None
+
+        # Find the immediately previous function
+        for i in range(self.contract_index, -1, -1):
+            found_function_id = False
+            for j in range(self.step_index, -1, -1):
+                target_id = self.contract_trace[i][j].function_id
+
+                if target_id != current_id:
+                    function_id = target_id
+                    found_function_id = True
+                    break
+
+            if found_function_id:
+                break
+        
+        if function_id is None:
+            print('Cannot step out.')
+            return
+        
+        marking_balance = 0
+        for i in range(self.contract_index, len(self.contract_trace)):
+            for j in range(self.step_index, len(self.contract_trace[i])):
+                if function_id == self.contract_trace[i][j].function_id:
+                    if self.contract_trace[i][j].marking == 'FUNCTION_EXIT':
+                        if marking_balance != 0:
+                            marking_balance -= 1
+                        else:
+                            self.contract_index = i
+                            self.step_index = j
+                            self.refresh = True
+                            return
+                    elif self.contract_trace[i][j] == 'FUNCTION_ENTRY':
+                        marking_balance += 1
+
 
 
     def do_next_func_call(self, arg):
@@ -288,7 +329,7 @@ class MacaronShell(cmd.Cmd):
 
     def print_current_step(self):
         current_step = self.get_current_step()
-        print(f'{current_step.code}\n{current_step.persistant_data}\n{current_step.debug_info}')
+        print(f'{current_step.code}\n{current_step.persistant_data}\n{current_step.debug_info}\n{current_step.marking} : {current_step.function_id}')
         
 
 if __name__ == '__main__':

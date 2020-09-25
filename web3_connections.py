@@ -4,7 +4,7 @@ import json
 #TODO Add security authentication options
 def get_trace(hash, rpc_endpoint):
     payload = {"jsonrpc":"2.0","id":8,"method":"debug_traceTransaction", "params":
-               [ hash, {"disableStorage":False,"disableMemory":True,"disableStack":False,"fullStorage":False}
+               [ hash, {"disableStorage":False,"disableMemory":False,"disableStack":False,"fullStorage":False}
                ]
     }
     response = requests.post(rpc_endpoint, json = payload, timeout = 100, stream = True)

@@ -11,6 +11,7 @@ from copy import deepcopy
 import os.path
 import pickle
 import functools
+from solidity_evaluator import opcodes
 
 
 # Globals
@@ -49,7 +50,6 @@ node_children_names = { 'parameters', 'statements', 'nodes', 'arguments', 'decla
                         'condition', 'baseExpression', 'indexExpression', 'loopExpression', 'returnParameters', 'subExpression', 'eventCall', 'components',
                         'externalReferences', '_codeLength', '_addr'}
 
-opcodes = {'SHA3' : 0x20, 'MSTORE': 0x52, 'SLOAD': 0x54, 'SSTORE': 0x55, 'JUMP': 0x56, 'JUMPI': 0x57, 'JUMPDEST': 0x5B}
 
 # TODO Cleanup
 # Debug
@@ -314,7 +314,8 @@ def __group_instructions(instruction_node_list): # TODO Fix certain function cal
     output_list = []
     var_values = {}
     grouped_nodes = {}
-    scope = None
+    scope_node = None
+    marking = ''
     
     for instruction_node_idx, (opcode, persistant_data, node_wrapper) in enumerate(instruction_node_list):
         # TODO Optimize
@@ -322,30 +323,33 @@ def __group_instructions(instruction_node_list): # TODO Fix certain function cal
         # Ascertain current node's scope (if applicable) by taking a look at its lineage
         node, lineage = node_wrapper
         if node['nodeType'] in {'ModifierDefinition', 'FunctionDefinition'}:
-            scope = node['src']
+            scope_node = node
         else:
             for ancestor in lineage:
                 if ancestor['nodeType'] in {'ModifierDefinition', 'FunctionDefinition'}:
-                    scope = ancestor['src']
+                    scope_node = ancestor
                     break
         
                     
         # Ignore nodes with invalid scopes and greate groups between JUMP instructions
-        if not scope:
+        if not scope_node:
             continue
-        elif opcode == opcodes['JUMPI'] or opcode == opcodes['JUMP']:
-            output_list.append((scope, grouped_nodes, var_values))
+        elif opcode == opcodes['JUMPI'] or opcode == opcodes['JUMP']: #TODO Check modifiers being ignored, possible culprit is how they are implemented by solidity
+            output_list.append((scope_node, grouped_nodes, var_values, marking))
+            marking = ''
             var_values = {}
             grouped_nodes = {}
-        elif opcode != opcodes['JUMPDEST']: # Do not use JUMPDEST instructions, as they only confuse the display process and their display is unnecessary
-
+        elif opcode == opcodes['JUMPDEST']:
+            # Do not group JUMPDEST instructions, as they only confuse the display process and their display is unnecessary
+            # JUMPDEST instructions should only be used to denote function entry, because the stepping-up functionality requires it
+            if node['nodeType'] == 'FunctionDefinition':
+                marking = 'FUNCTION_ENTRY'
+            elif node['nodeType'] == 'FunctionCall':
+                marking = 'FUNCTION_EXIT'
+            
+        else: 
             # If storage is accessed, record values for display purposes
             if opcode == opcodes['SLOAD']:  # SLOAD [SHA], pushes VALUE at SHA on stack
-                # if node['nodeType'] == 'Identifier':
-                #     var_values[node['name']] = instruction_node_list[idx + 1][1].stack_contents[0]
-                # else:
-                #     print(f'Storage recording error: Unknown nodeType {node["nodeType"]}')
-                # As long as SSTORE instructions are recorded successfully, SLOADs need not be taken into account
                 pass
 
             elif opcode == opcodes['SSTORE']: # SSTORE [SHA, VALUE]
@@ -379,14 +383,15 @@ def __group_instructions(instruction_node_list): # TODO Fix certain function cal
             grouped_nodes[node['id']] = node
 
     if grouped_nodes:
-        output_list.append((scope, grouped_nodes, var_values))
+        output_list.append((scope_node, grouped_nodes, var_values, marking))
+        marking = ''
 
     return output_list
 
 
 def calculate_trace_display(stack, conn):
     """Renders a trace in human-readable format."""
-    StepWrapper = namedtuple('StepWrapper', ['code', 'persistant_data', 'debug_info'])
+    StepWrapper = namedtuple('StepWrapper', ['function_id', 'code', 'persistant_data', 'debug_info', 'marking'])
     ContractWrapper = namedtuple('ContractWrapper', ['address', 'reason', 'steps'])
 
     contract_trace = []
@@ -398,7 +403,7 @@ def calculate_trace_display(stack, conn):
 
         if res is None:
             current_step_code += "Source not found in db, skipping..."
-            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(current_step_code, {}, [])] ))
+            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(0, current_step_code, {}, [], ('',''))] ))
             continue
 
         code = res['code'].encode()
@@ -414,7 +419,7 @@ def calculate_trace_display(stack, conn):
 
         if solidity_file is None or ast is None:
             current_step_code += 'AST is empty or using legacyAST, which is not supported.'
-            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(current_step_code, {}, [])] ))
+            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(0, current_step_code, {}, [], ('',''))] ))
             continue
 
         contract = solidity_file[contract_name]
@@ -449,7 +454,8 @@ def calculate_trace_display(stack, conn):
                         print(f"Could not find ast node from source mapping: {fro} : {length} : {source_index}")
                     else:
                         instruction_node_list.append( (stack.instructions_order[stack_entry][pc], opcode, stack.data_at_instruction[stack_entry][pc], ast_node) )
-                        
+                elif source_index != -1: # -1 is reserved for code the compiler adds
+                    print(f'Invalid source mapping: {fro} : {length} : {source_index}')     
                         
             # it's a push instruction, increment by extra size of instruction
             if 0x60 <= opcode < 0x80:
@@ -465,8 +471,9 @@ def calculate_trace_display(stack, conn):
         # Highlight executed code
         step_counter = 0
         step_trace = []
-        for idx, (scope, node_set, var_values) in enumerate(__group_instructions(instruction_node_list)):
+        for idx, (scope_node, node_set, var_values, marking) in enumerate(__group_instructions(instruction_node_list)):
 
+            scope = scope_node['src']
             scope_f, scope_r, scope_l = map(int, scope.split(':'))
             highlighted_nodes = set()
             highlighted_indices = set()
@@ -506,7 +513,7 @@ def calculate_trace_display(stack, conn):
             # Unless there was nothing to highlight, wrap all the data in a single step for the contract trace display
             if node_types:
                 current_step_code += f"step {step_counter}:\nline: {line_index[scope_f] + 1} : {source_display.decode()}{color_normal}\n"
-                step_trace.append(StepWrapper(current_step_code, var_values, node_types))
+                step_trace.append(StepWrapper(scope_node['id'], current_step_code, var_values, node_types, marking))
                 current_step_code = ""
                 step_counter += 1
             
