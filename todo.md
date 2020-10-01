@@ -23,6 +23,7 @@
   - [x]  Shell UI implementation
   - [x] Basic Navigation
   - [ ] Step Up Functionality
+  - [ ] Step Over Functionality
 
 - [ ] Polishing
   - [x] Easier deployment

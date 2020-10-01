@@ -79,6 +79,7 @@ class MacaronShell(cmd.Cmd):
         current_id = self.contract_trace[self.contract_index][self.step_index].function_id
         function_id = None
 
+        # TODO As it stands, the previous function could actually be a function we returned from instead of the parent function. This is a bug.
         # Find the immediately previous function
         for i in range(self.contract_index, -1, -1):
             found_function_id = False
@@ -98,8 +99,9 @@ class MacaronShell(cmd.Cmd):
             return
         
         marking_balance = 0
+        current_step_index = self.step_index
         for i in range(self.contract_index, len(self.contract_trace)):
-            for j in range(self.step_index, len(self.contract_trace[i])):
+            for j in range(current_step_index, len(self.contract_trace[i])):
                 if function_id == self.contract_trace[i][j].function_id:
                     if self.contract_trace[i][j].marking == 'FUNCTION_EXIT':
                         if marking_balance != 0:
@@ -111,6 +113,7 @@ class MacaronShell(cmd.Cmd):
                             return
                     elif self.contract_trace[i][j] == 'FUNCTION_ENTRY':
                         marking_balance += 1
+            current_step_index = 0
 
 
 
@@ -345,6 +348,7 @@ if __name__ == '__main__':
             user="tracer",
             passwd="a=$G5)Z]vqY6]}w{",
             db="gigahorse",
+            read_timeout=int(2),
             charset='utf8mb4')
 
         # Attacks
@@ -354,7 +358,7 @@ if __name__ == '__main__':
         # transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack - Compilation Error
 
         # Other Tests
-        transaction = '0x5c932a5c59f9691ca9f334fe744c00f9aabe64991ade8fea52a6e1b22a793664'    # Fomo3D
+        # transaction = '0x5c932a5c59f9691ca9f334fe744c00f9aabe64991ade8fea52a6e1b22a793664'    # Fomo3D
         # transaction = '0x7e8738e2fe6e67ac07b003fe23e4961b0677d4ef345d141647cc407b915d6927'    # Sol Wallet - Compilation Error
         # transaction = '0x129da6f54480b27d49411af82db7da5c98cf8f455508bc7e87838e938d4d0ef2'    # SafeMath
         # transaction = '0x26df3b770389b8f298446a25404d05402065bc8fe00ff5f6c0af6912c2c46947'    # E2D
@@ -365,6 +369,10 @@ if __name__ == '__main__':
         # transaction = '0x6aec28ad65052132bf04c0ed621e24c007b2476fe6810389232d3ac4222c0ccc'    # Doubleway
         # transaction = '0xa228e903a5d751e4268a602bd6b938392272e4024e2071f7cd4a479e8125c370'    # Saturn Network 2 - Compilation Error
         # transaction = '0xf3e1b43611423c39d2839dc95d70090ba1ae91d66a8303ddad842e4bb9ed4793'    # Chess Coin
+        # transaction = '0x8737d8a6d0b180b4a764145aac2bb23459d98a0113e45231467ae33c37b75746' # TokenMintERC20Token v0.5.0
+        # transaction = '0x8adf1863f079ef7c6e1d6e45548700bcf5847806343705132cc97b1818977337' # Ventmode Token v0.5.3
+        transaction = '0xa67c14e87755014e75f843aef3db09a5a2d8e54f746e6938b77ea1ccae1ccf2c' # Scheme Registrar v0.5.13
+        
 
         # Ropsten Tests
         # transaction = '0xebed482d1f5c925265d889fa6200225759a6e816469f4427cfee25a7a7daca92' # mapping.sol

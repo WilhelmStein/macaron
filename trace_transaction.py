@@ -11,7 +11,7 @@ from copy import deepcopy
 import os.path
 import pickle
 import functools
-from solidity_evaluator import opcodes
+from solidity_evaluator import opcodes, evaluate
 
 
 # Globals
@@ -40,7 +40,7 @@ query_source = """
 
 
 validAstTypes = [   'ParameterList', 'ExpressionStatement', 'VariableDeclaration', 'VariableDeclarationStatement', 'Return', 'Assignment', 'Identifier',
-                    'BinaryOperation', 'Literal', 'MemberAccess', 'IndexAccess', 'FunctionCall', 'UnaryOperation', 'Continue', 'Break']
+                    'BinaryOperation', 'Literal', 'MemberAccess', 'IndexAccess', 'FunctionCall', 'UnaryOperation', 'Continue', 'Break', 'Conditional']
 
 invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'DoWhileStatement', 'WhileStatement', 'ForStatement', 'IfStatement',
                    'FunctionDefinition', 'PlaceholderStatement']
@@ -69,7 +69,7 @@ def __make_compiler_json(filename, optimization_enabled = False, optimization_ru
         'evmVersion': evmVersion, 
         'outputSelection': {
             "*": {
-                "*": [ 'evm.deployedBytecode.sourceMap', 'evm.deployedBytecode.object' ],
+                "*": [ 'evm.deployedBytecode.sourceMap', 'evm.deployedBytecode.object', 'storageLayout' ],
                 "": ["ast"]
             }
         }
@@ -275,6 +275,8 @@ def __calculate_storage_variable_key(starting_index_access_count, node, instruct
         elif current_node['nodeType'] == 'Identifier':
             var_value_key = current_node['name']
             break
+        elif current_node['nodeType'] == 'MemberAccess':
+            current_node = current_node['expression']
         else:
             raise Exception(f'Error: Unknown node type {current_node["nodeType"]} encountered during storage inventory.')
 
@@ -287,19 +289,19 @@ def __calculate_storage_variable_key(starting_index_access_count, node, instruct
         # relevant SHA3 instruction found, assume that first SHA3 opcode encountered is correlated with the current SSTORE opcode
         if access_count == number_of_accesses:
             return var_value_key
-        elif target_opcode ==  opcodes['SHA3']: #and instruction_node_list[i + 1][1].stack_contents[-1] == persistant_data.stack_contents[-1]:
-            # sha3_offset = target_persistant_data.stack_contents[-1]
-            # sha3_length = target_persistant_data.stack_contents[-2]
-
+        elif target_opcode ==  opcodes['SHA3'].value: #and instruction_node_list[i + 1][1].stack[-1] == persistant_data.stack[-1]:
+            # sha3_offset = target_persistant_data.stack[-1]
+            # sha3_length = target_persistant_data.stack[-2]
+            # evaluate(target_persistant_data, ['SHA3'])
             found_first_mstore = False
             for j in range(i - 1, -1 , -1):
                 # search for mstores
                 target_opcode, target_persistant_data, target_node = instruction_node_list[j]
 
-                if target_opcode == opcodes['MSTORE']: #and target_persistant_data.stack_contents[-1] == sha3_offset and target_persistant_data.stack_contents[-2] == sha3_length:
+                if target_opcode == opcodes['MSTORE'].value: #and target_persistant_data.stack[-1] == sha3_offset and target_persistant_data.stack[-2] == sha3_length:
                     if found_first_mstore:
                         # The second mstore found is the one concerning the index
-                        mstore_value = target_persistant_data.stack_contents[-2]
+                        mstore_value = target_persistant_data.stack[-2]
                         var_value_key += f'[{int(mstore_value, 16)}]'
                         break
                     else:
@@ -308,7 +310,7 @@ def __calculate_storage_variable_key(starting_index_access_count, node, instruct
             access_count += 1
     
 
-def __group_instructions(instruction_node_list): # TODO Fix certain function calls not being recorded
+def __group_instructions(instruction_node_list, storage_layout): # TODO Fix certain function calls not being recorded
     """Try to group bytecode instructions that correspond to the same solidity instruction"""
     
     output_list = []
@@ -322,7 +324,9 @@ def __group_instructions(instruction_node_list): # TODO Fix certain function cal
 
         # Ascertain current node's scope (if applicable) by taking a look at its lineage
         node, lineage = node_wrapper
-        if node['nodeType'] in {'ModifierDefinition', 'FunctionDefinition'}:
+        if node['nodeType'] == 'ContractDefinition':
+            continue
+        elif node['nodeType'] in {'ModifierDefinition', 'FunctionDefinition'}:
             scope_node = node
         else:
             for ancestor in lineage:
@@ -334,12 +338,12 @@ def __group_instructions(instruction_node_list): # TODO Fix certain function cal
         # Ignore nodes with invalid scopes and greate groups between JUMP instructions
         if not scope_node:
             continue
-        elif opcode == opcodes['JUMPI'] or opcode == opcodes['JUMP']: #TODO Check modifiers being ignored, possible culprit is how they are implemented by solidity
+        elif opcode == opcodes['JUMPI'].value or opcode == opcodes['JUMP'].value: #TODO Check modifiers being ignored, possible culprit is how they are implemented by solidity
             output_list.append((scope_node, grouped_nodes, var_values, marking))
             marking = ''
             var_values = {}
             grouped_nodes = {}
-        elif opcode == opcodes['JUMPDEST']:
+        elif opcode == opcodes['JUMPDEST'].value:
             # Do not group JUMPDEST instructions, as they only confuse the display process and their display is unnecessary
             # JUMPDEST instructions should only be used to denote function entry, because the stepping-up functionality requires it
             if node['nodeType'] == 'FunctionDefinition':
@@ -349,35 +353,35 @@ def __group_instructions(instruction_node_list): # TODO Fix certain function cal
             
         else: 
             # If storage is accessed, record values for display purposes
-            if opcode == opcodes['SLOAD']:  # SLOAD [SHA], pushes VALUE at SHA on stack
+            if opcode == opcodes['SLOAD'].value:  # SLOAD [SHA], pushes VALUE at SHA on stack
                 pass
 
-            elif opcode == opcodes['SSTORE']: # SSTORE [SHA, VALUE]
+            elif opcode == opcodes['SSTORE'].value: # SSTORE [SHA, VALUE]
                 # TODO Check if arrays are registered correctly
                 # TODO Make stored values more meaningful
                 if node['nodeType'] == 'Assignment':
                     lhs = node['leftHandSide']
 
                     if lhs['nodeType'] == 'Identifier':
-                        var_values[lhs['name']] = persistant_data.stack_contents[-2]
+                        var_values[lhs['name']] = persistant_data.stack[-2]
                     elif lhs['nodeType'] == 'MemberAccess':
                         lhsExpr = lhs['expression']
 
                         if lhsExpr['nodeType'] == 'Identifier':
-                            var_values[f'{lhsExpr["name"]}.{lhs["memberName"]}'] = persistant_data.stack_contents[-2]
+                            var_values[f'{lhsExpr["name"]}.{lhs["memberName"]}'] = persistant_data.stack[-2]
                         elif lhsExpr['nodeType'] == 'IndexAccess':
-                            var_values[f'{__calculate_storage_variable_key(1, lhsExpr, instruction_node_list, instruction_node_idx)}.{lhs["memberName"]}'] = persistant_data.stack_contents[-2]
+                            var_values[f'{__calculate_storage_variable_key(1, lhsExpr, instruction_node_list, instruction_node_idx)}.{lhs["memberName"]}'] = persistant_data.stack[-2]
 
                         else:
                             print(f'In leftHandSide node \'{lhs["nodeType"]}\':\n\tUnknown expression type \'{lhsExpr["nodeType"]}\'')
 
                     elif lhs['nodeType'] == 'IndexAccess':
-                        lhsExpr = lhs['baseExpression']
-                        var_values[__calculate_storage_variable_key(1, lhsExpr, instruction_node_list, instruction_node_idx)] = persistant_data.stack_contents[-2]
+                        lhsExpr = lhs
+                        var_values[__calculate_storage_variable_key(1, lhsExpr, instruction_node_list, instruction_node_idx)] = persistant_data.stack[-2]
                     else:
                         print(f'In assignment node \'{node["nodeType"]}\':\n\tUnknown leftHandSide type \'{lhs["nodeType"]}\'')
                 else:
-                    print(f'Unknown node type \'{node["nodeType"]}\'')
+                    print(f'Warning: Unknown node type \'{node["nodeType"]}\' encountered during storage mapping')
                 
 
             grouped_nodes[node['id']] = node
@@ -425,6 +429,7 @@ def calculate_trace_display(stack, conn):
         contract = solidity_file[contract_name]
         source_map = contract['evm']['deployedBytecode']['sourceMap']
         object = contract['evm']['deployedBytecode']['object']
+        storage_layout = contract['storageLayout']
 
         # Match instructions to the ast nodes that they belong to
         pc = 0
@@ -471,7 +476,7 @@ def calculate_trace_display(stack, conn):
         # Highlight executed code
         step_counter = 0
         step_trace = []
-        for idx, (scope_node, node_set, var_values, marking) in enumerate(__group_instructions(instruction_node_list)):
+        for idx, (scope_node, node_set, var_values, marking) in enumerate(__group_instructions(instruction_node_list, storage_layout)):
 
             scope = scope_node['src']
             scope_f, scope_r, scope_l = map(int, scope.split(':'))
