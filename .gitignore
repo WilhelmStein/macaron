@@ -2,3 +2,4 @@
 .pkl
 __pycache__
 env
+local_contract_db

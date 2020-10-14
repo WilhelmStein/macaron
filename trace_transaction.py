@@ -148,16 +148,33 @@ def __compile_solidity(code, compiler, optimization, other_settings, **kwargs):
     return (ast, contract)
 
 
-def __get_contract_from_db(a, conn):
-    """Connect to contract-lib.com and receive the contract's code."""
+def __get_contract_from_db(contract_address, conn):
+    """Connect to contract-lib.com and receive the contract's code. If the connection is None, then look locally."""
 
-    res = pd.read_sql_query(query_source%a, conn)
-    if len(res) == 0:
-        return None
-    for i, row in res.iterrows():
-        if sum(v is None for v in row.values) > 1:
+    if conn:
+        res = pd.read_sql_query(query_source%contract_address, conn)
+        if len(res) == 0:
             return None
-        return row
+        for i, row in res.iterrows():
+            if sum(v is None for v in row.values) > 1:
+                return None
+            return row
+    else:
+        if os.path.isdir('./local_contract_db'):
+            if os.path.isdir(f'./local_contract_db/{contract_address}'):
+
+                with open(f'./local_contract_db/{contract_address}/code', 'r') as code_file:
+                    code = code_file.read()
+                
+                with open(f'./local_contract_db/{contract_address}/contract_name', 'r') as contract_name_file:
+                    contract_name = contract_name_file.read()
+                    
+                return {'code': code, 'contract_name': contract_name, 'compiler': 'v0.5.14+commit.01f1aaa4', 'optimization': 'Yes with 200 runs' , 'other_settings': 'byzantium'}
+            else:
+                return None
+        else:
+            return None
+
 
 def __compile_contract(stack_entry_folder, contract_wrapper):
     """Compile a contract if you have not already and save its output, or load it if it already exists. Then return it's AST and Solidity_File data."""
@@ -314,7 +331,7 @@ def __group_instructions(instruction_node_list, storage_layout): # TODO Fix cert
     """Try to group bytecode instructions that correspond to the same solidity instruction"""
     
     output_list = []
-    var_values = {}
+    # var_values = {}
     grouped_nodes = {}
     scope_node = None
     marking = ''
@@ -339,9 +356,9 @@ def __group_instructions(instruction_node_list, storage_layout): # TODO Fix cert
         if not scope_node:
             continue
         elif opcode == opcodes['JUMPI'].value or opcode == opcodes['JUMP'].value: #TODO Check modifiers being ignored, possible culprit is how they are implemented by solidity
-            output_list.append((scope_node, grouped_nodes, var_values, marking))
+            output_list.append((scope_node, grouped_nodes, persistant_data.storage, marking))
             marking = ''
-            var_values = {}
+            # var_values = {}
             grouped_nodes = {}
         elif opcode == opcodes['JUMPDEST'].value:
             # Do not group JUMPDEST instructions, as they only confuse the display process and their display is unnecessary
@@ -351,43 +368,11 @@ def __group_instructions(instruction_node_list, storage_layout): # TODO Fix cert
             elif node['nodeType'] == 'FunctionCall':
                 marking = 'FUNCTION_EXIT'
             
-        else: 
-            # If storage is accessed, record values for display purposes
-            if opcode == opcodes['SLOAD'].value:  # SLOAD [SHA], pushes VALUE at SHA on stack
-                pass
-
-            elif opcode == opcodes['SSTORE'].value: # SSTORE [SHA, VALUE]
-                # TODO Check if arrays are registered correctly
-                # TODO Make stored values more meaningful
-                if node['nodeType'] == 'Assignment':
-                    lhs = node['leftHandSide']
-
-                    if lhs['nodeType'] == 'Identifier':
-                        var_values[lhs['name']] = persistant_data.stack[-2]
-                    elif lhs['nodeType'] == 'MemberAccess':
-                        lhsExpr = lhs['expression']
-
-                        if lhsExpr['nodeType'] == 'Identifier':
-                            var_values[f'{lhsExpr["name"]}.{lhs["memberName"]}'] = persistant_data.stack[-2]
-                        elif lhsExpr['nodeType'] == 'IndexAccess':
-                            var_values[f'{__calculate_storage_variable_key(1, lhsExpr, instruction_node_list, instruction_node_idx)}.{lhs["memberName"]}'] = persistant_data.stack[-2]
-
-                        else:
-                            print(f'In leftHandSide node \'{lhs["nodeType"]}\':\n\tUnknown expression type \'{lhsExpr["nodeType"]}\'')
-
-                    elif lhs['nodeType'] == 'IndexAccess':
-                        lhsExpr = lhs
-                        var_values[__calculate_storage_variable_key(1, lhsExpr, instruction_node_list, instruction_node_idx)] = persistant_data.stack[-2]
-                    else:
-                        print(f'In assignment node \'{node["nodeType"]}\':\n\tUnknown leftHandSide type \'{lhs["nodeType"]}\'')
-                else:
-                    print(f'Warning: Unknown node type \'{node["nodeType"]}\' encountered during storage mapping')
-                
-
+        else:
             grouped_nodes[node['id']] = node
 
     if grouped_nodes:
-        output_list.append((scope_node, grouped_nodes, var_values, marking))
+        output_list.append((scope_node, grouped_nodes, persistant_data.storage, marking))
         marking = ''
 
     return output_list
@@ -396,7 +381,7 @@ def __group_instructions(instruction_node_list, storage_layout): # TODO Fix cert
 def calculate_trace_display(stack, conn):
     """Renders a trace in human-readable format."""
     StepWrapper = namedtuple('StepWrapper', ['function_id', 'code', 'persistant_data', 'debug_info', 'marking'])
-    ContractWrapper = namedtuple('ContractWrapper', ['address', 'reason', 'steps'])
+    ContractWrapper = namedtuple('ContractWrapper', ['address', 'reason', 'steps', 'storage_layout'])
 
     contract_trace = []
 
@@ -407,13 +392,13 @@ def calculate_trace_display(stack, conn):
 
         if res is None:
             current_step_code += "Source not found in db, skipping..."
-            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(0, current_step_code, {}, [], ('',''))] ))
+            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(0, current_step_code, {}, [], ('',''))], {} ))
             continue
+
 
         code = res['code'].encode()
         contract_name = res['contract_name']
-        bytecode = res['hex_bytecode']
-        source_map = res['source_map']
+
 
         stack_entry_folder = f"{stack.starting_transaction}/{stack_entry[0]}"
         ast = solidity_file = None
@@ -423,7 +408,7 @@ def calculate_trace_display(stack, conn):
 
         if solidity_file is None or ast is None:
             current_step_code += 'AST is empty or using legacyAST, which is not supported.'
-            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(0, current_step_code, {}, [], ('',''))] ))
+            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(0, current_step_code, {}, [], ('',''))], {} ))
             continue
 
         contract = solidity_file[contract_name]
@@ -522,7 +507,7 @@ def calculate_trace_display(stack, conn):
                 current_step_code = ""
                 step_counter += 1
             
-        contract_trace.append(ContractWrapper(stack_entry.address , stack_entry.reason.split(' '), step_trace))
+        contract_trace.append(ContractWrapper(stack_entry.address , stack_entry.reason.split(' '), step_trace, storage_layout))
 
     # After all the trace visualization data are calculated, make sure that the contract storage data are inherited downwards, moving through the contract
     storage_per_contract = defaultdict(dict)

@@ -2,6 +2,8 @@
 
 import cmd, sys, copy, csv, pickle, functools, pymysql, evm_stack
 from trace_transaction import calculate_trace_display
+from expression_parser import parse_expression, StateCode
+from web3 import Web3
 
 class MacaronShell(cmd.Cmd):
 
@@ -9,7 +11,7 @@ class MacaronShell(cmd.Cmd):
     color_reset = '\033[m'
     clear = '\033c\033'
 
-    intro = f'{color_normal}Macaron Navigator V 0.5'
+    intro = f'{color_normal}Macaron Navigator Prototype'
     prompt = '>:'
     step_index = contract_index = 0
     contract_trace = []
@@ -17,10 +19,11 @@ class MacaronShell(cmd.Cmd):
 
     refresh = False
 
-    def __init__(self, transaction_address = None, rpc_endpoint = 'http://localhost:8545'): #TODO Add instant alias loading
+    def __init__(self, transaction_address = None, database_connection = None, rpc_endpoint = 'http://localhost:8545'): #TODO Add instant alias loading
         cmd.Cmd.__init__(self)
 
         self.rpc_endpoint = rpc_endpoint
+        self.database_connection = database_connection
         self.current_transaction = transaction_address
         self.contract_trace = []
         self.aliases = {
@@ -50,7 +53,7 @@ class MacaronShell(cmd.Cmd):
     # TODO bounds check for when no transaction has been loaded
     def do_next(self, arg):
         '''Navigate to the next step.'''
-        if self.step_index == len(self.contract_trace[self.contract_index]) - 1:
+        if self.step_index == len(self.contract_trace[self.contract_index].steps) - 1:
             if self.contract_index == len(self.contract_trace) - 1:
                 print('Reached the end of the trace.')
             else:
@@ -67,7 +70,7 @@ class MacaronShell(cmd.Cmd):
                 print('Reached the start of the trace.')
             else:
                 self.contract_index -= 1
-                self.step_index = len(self.contract_trace[self.contract_index]) - 1
+                self.step_index = len(self.contract_trace[self.contract_index].steps) - 1
                 self.refresh = True
         else:
             self.step_index -= 1
@@ -76,15 +79,23 @@ class MacaronShell(cmd.Cmd):
         
     def do_step_out(self, arg):
         '''Step out of the function currently in'''
-        current_id = self.contract_trace[self.contract_index][self.step_index].function_id
+        current_id = self.contract_trace[self.contract_index].steps[self.step_index].function_id
         function_id = None
 
         # TODO As it stands, the previous function could actually be a function we returned from instead of the parent function. This is a bug.
         # Find the immediately previous function
+        current_step_index = None
         for i in range(self.contract_index, -1, -1):
             found_function_id = False
-            for j in range(self.step_index, -1, -1):
-                target_id = self.contract_trace[i][j].function_id
+
+            if current_step_index:
+                current_step_index = len(self.contract_trace[i].steps)
+            else:
+                current_step_index = self.step_index
+
+
+            for j in range(current_step_index, -1, -1):
+                target_id = self.contract_trace[i].steps[j].function_id
 
                 if target_id != current_id:
                     function_id = target_id
@@ -93,6 +104,7 @@ class MacaronShell(cmd.Cmd):
 
             if found_function_id:
                 break
+            
         
         if function_id is None:
             print('Cannot step out.')
@@ -101,9 +113,9 @@ class MacaronShell(cmd.Cmd):
         marking_balance = 0
         current_step_index = self.step_index
         for i in range(self.contract_index, len(self.contract_trace)):
-            for j in range(current_step_index, len(self.contract_trace[i])):
-                if function_id == self.contract_trace[i][j].function_id:
-                    if self.contract_trace[i][j].marking == 'FUNCTION_EXIT':
+            for j in range(current_step_index, len(self.contract_trace[i].steps)):
+                if function_id == self.contract_trace[i].steps[j].function_id:
+                    if self.contract_trace[i].steps[j].marking == 'FUNCTION_EXIT':
                         if marking_balance != 0:
                             marking_balance -= 1
                         else:
@@ -111,7 +123,7 @@ class MacaronShell(cmd.Cmd):
                             self.step_index = j
                             self.refresh = True
                             return
-                    elif self.contract_trace[i][j] == 'FUNCTION_ENTRY':
+                    elif self.contract_trace[i].steps[j] == 'FUNCTION_ENTRY':
                         marking_balance += 1
             current_step_index = 0
 
@@ -158,11 +170,11 @@ class MacaronShell(cmd.Cmd):
         try:
             if arg == '':
                 print('Usage: print VARIABLE_NAME')
-                return
+                return            
 
-            print(f'{arg} = {self.get_current_step().persistant_data[arg]}')
-        except KeyError:
-            print(f'Error: Could not find variable \'{arg}\'')
+            print(f'{arg} = {self.access_storage(parse_expression(arg))}')
+        except Exception as e:
+            print(e)
 
 
     # Filesystem commands
@@ -193,12 +205,12 @@ class MacaronShell(cmd.Cmd):
     def do_load_transaction(self, arg):
         '''Load a transaction from alias or address'''
         if arg[0:2] == "0x":
-            self.contract_trace = [contract_wrapper.steps for contract_wrapper in self.prepare_transaction(arg)]
+            self.contract_trace = self.prepare_transaction(arg)
         else:
             aliases = self.load_pickle('transaction_aliases.pkl', 'rb')
             
             try:
-                self.contract_trace = [contract_wrapper.steps for contract_wrapper in self.prepare_transaction(aliases[arg])]
+                self.contract_trace = self.prepare_transaction(aliases[arg])
             except KeyError:
                 print(f'Error: Could not find transaction alias \'{arg}\'')
 
@@ -291,7 +303,7 @@ class MacaronShell(cmd.Cmd):
         stack = evm_stack.EVMExecuctionStack()
         stack.import_transaction(transaction, self.rpc_endpoint)
         self.contract_index = self.step_index = 0
-        return calculate_trace_display(stack, conn)
+        return calculate_trace_display(stack, self.database_connection)
 
 
     def load_pickle(self, filename, open_method):
@@ -304,7 +316,7 @@ class MacaronShell(cmd.Cmd):
 
     def reload_transaction(self):
         if self.current_transaction:
-            self.contract_trace = [contract_wrapper.steps for contract_wrapper in self.prepare_transaction(self.current_transaction)]
+            self.contract_trace = self.prepare_transaction(self.current_transaction)
         else:
             print('No transaction currently loaded.')
 
@@ -324,10 +336,100 @@ class MacaronShell(cmd.Cmd):
             print(f'{self.clear}{self.color_normal}') # Reset Terminal
             self.print_current_step()
             print(self.help_message)
-    
 
+    
+    def access_storage(self, access_instructions):
+        storage_layout = self.contract_trace[self.contract_index].storage_layout
+        current_address = 0
+        current_offset = 0
+        current_encoding = None
+        current_type_data = None
+
+        primary_instruction, *other_instructions = access_instructions
+        # First, find the primary variable in storage
+        found = False
+        for entry in storage_layout['storage']:
+            if primary_instruction.value == entry['label']:
+                
+                current_type_data = storage_layout['types'][entry['type']]
+                current_encoding = current_type_data['encoding']
+                current_address += int(entry['slot'])
+                current_offset = int(entry['offset'])
+                found = True
+                break
+        
+        if not found:
+            raise Exception('Could not find target variable in storage')
+        
+        # Then, start accessing its inner parts
+        for instruction in other_instructions:
+            if instruction.code == StateCode.Identifier:
+                if current_encoding == 'inplace':
+                    pass
+                elif current_encoding == 'mapping':
+                    current_type_data = storage_layout['types'][current_type_data['value']]
+                elif current_encoding == 'dynamic_array':
+                    raise Exception('DYNAMIC ARRAY IDENTIFIER NOT CONFIGURED YET')
+                elif current_encoding == 'bytes':
+                    raise Exception('BYTES IDENTIFIER NOT CONFIGURED YET')
+                else:
+                    raise Exception(f'Error: Unknown encoding \'{current_encoding}\' encountered during storage access')
+
+                found = False
+            
+                for member in current_type_data['members']:
+                    if member['label'] == instruction.value:
+                        current_address += int(member['slot'])
+                        current_type_data = storage_layout['types'][member['type']]
+                        current_encoding = current_type_data['encoding']
+                        current_offset = int(member['offset'])
+                        found = True
+                        break
+
+                if not found:
+                    raise Exception(f'Could not find member {instruction.value}')
+
+            elif instruction.code == StateCode.IndexAccess:
+                
+                # Decode hex representation
+                if instruction.value == '0x':
+                    index_value = 0
+                elif len(instruction.value) >= 3 and instruction.value[0:2] == '0x':
+                    index_value = int(instruction.value, 16)
+                else:
+                    index_value = int(instruction.value)
+
+
+                if current_encoding == 'inplace':
+                    current_address += index_value
+                elif current_encoding == 'mapping':
+                    current_address = int(Web3.solidityKeccak(['uint256', 'uint256'], [index_value, current_address]).hex(), base=16)
+                elif current_encoding == 'dynamic_array':
+                    current_address = int(Web3.solidityKeccak(['uint256'], [current_address]).hex(), base=16) + int(index_value)
+                elif current_encoding == 'bytes':
+                    raise Exception('BYTES INDEXACCESS NOT CONFIGURED YET')
+                else:
+                    raise Exception(f'Error: Unknown encoding \'{current_encoding}\' encountered during storage access')
+
+
+        try:
+            # Stringify the final address to access and add the necessary padding
+            final_address = Web3.toHex(current_address)[2:]
+            final_address = final_address.zfill(65 - len(final_address))
+
+            # Use offset for tightly packed variables
+            accessed_value = self.contract_trace[self.contract_index].steps[self.step_index].persistant_data[final_address][64 - (current_offset + int(current_type_data['numberOfBytes']) ) * 2 : 64 - current_offset * 2]
+            
+            # TODO Add different printing accoring to type
+            return_value = int(accessed_value, base=16)
+
+            return return_value
+        except KeyError:
+            print(f'Nothing to access in storage area {final_address}')
+            return '?'
+        
     def get_current_step(self):
-        return self.contract_trace[self.contract_index][self.step_index]
+        return self.contract_trace[self.contract_index].steps[self.step_index]
     
 
     def print_current_step(self):
@@ -342,43 +444,25 @@ if __name__ == '__main__':
         #     raise Exception('Usage: python3 macaron_shell.py TRANSACTION')
 
 
-        conn = pymysql.connect(
-            host="127.0.0.1",
-            port=int(3307),
-            user="tracer",
-            passwd="a=$G5)Z]vqY6]}w{",
-            db="gigahorse",
-            read_timeout=int(2),
-            charset='utf8mb4')
+        # conn = pymysql.connect(
+        #     host="127.0.0.1",
+        #     port=int(3307),
+        #     user="tracer",
+        #     passwd="a=$G5)Z]vqY6]}w{",
+        #     db="gigahorse",
+        #     read_timeout=int(3),
+        #     charset='utf8mb4')
+        conn = None
 
-        # Attacks
-        # transaction = '0x0ec3f2488a93839524add10ea229e773f6bc891b4eb4794c3337d4495263790b'    # DAO Attack - Compilation Error
-        # transaction = '0x77e93eaa08349fff1c68025e77a2d95e3e88f673d33c5501664e958d8727d4a9'    # Parity Attack - Compilation Error
-        # transaction = '0xd6c24da4e17aa18db03f9df46f74f119fa5c2314cb1149cd3f88881ddc475c5a'    # DAOSTACK Attack - Self Destructed :(
-        # transaction = '0xb5c8bd9430b6cc87a0e2fe110ece6bf527fa4f170a4bc8cd032f768fc5219838'    # Flash Loan Attack - Compilation Error
-
-        # Other Tests
-        # transaction = '0x5c932a5c59f9691ca9f334fe744c00f9aabe64991ade8fea52a6e1b22a793664'    # Fomo3D
-        # transaction = '0x7e8738e2fe6e67ac07b003fe23e4961b0677d4ef345d141647cc407b915d6927'    # Sol Wallet - Compilation Error
-        # transaction = '0x129da6f54480b27d49411af82db7da5c98cf8f455508bc7e87838e938d4d0ef2'    # SafeMath
-        # transaction = '0x26df3b770389b8f298446a25404d05402065bc8fe00ff5f6c0af6912c2c46947'    # E2D
-        # transaction = '0xa2f866c2b391c9d35d8f18edb006c9a872c0014b992e4b586cc2f11dc2b24ebd'    # test1
-        # transaction = '0xc1f534b03e5d4840c091c54224c3381b892b8f1a2869045f49913f3cfaf95ba7'    # Million Money
-        # transaction = '0x51f37d7b41e6864d1190d8f596e956501d9f4e0f8c598dbcbbc058c10b25aa3b'    # Dust
-        # transaction = '0x3f0a309ebbc5642ec18047fb902c383b33e951193bda6402618652e9234c9abb'    # Tokens
-        # transaction = '0x6aec28ad65052132bf04c0ed621e24c007b2476fe6810389232d3ac4222c0ccc'    # Doubleway
-        # transaction = '0xa228e903a5d751e4268a602bd6b938392272e4024e2071f7cd4a479e8125c370'    # Saturn Network 2 - Compilation Error
-        # transaction = '0xf3e1b43611423c39d2839dc95d70090ba1ae91d66a8303ddad842e4bb9ed4793'    # Chess Coin
-        # transaction = '0x8737d8a6d0b180b4a764145aac2bb23459d98a0113e45231467ae33c37b75746' # TokenMintERC20Token v0.5.0
-        # transaction = '0x8adf1863f079ef7c6e1d6e45548700bcf5847806343705132cc97b1818977337' # Ventmode Token v0.5.3
+       # Mainnet Tests
         transaction = '0xa67c14e87755014e75f843aef3db09a5a2d8e54f746e6938b77ea1ccae1ccf2c' # Scheme Registrar v0.5.13
         
 
-        # Ropsten Tests
-        # transaction = '0xebed482d1f5c925265d889fa6200225759a6e816469f4427cfee25a7a7daca92' # mapping.sol
+        # Local Tests
+        transaction = '0x5b2cbbfc8b6b0c46bba5c36d25e6d153d0ea5f3ff543d536cb2829f01c11de3c' # Storage Write
+        # transaction = '0x769192d516a9ce1d3250c7ab5984eadf57792842032577dc55f90698758238e0' # Storage Read
 
-
-        navigator = MacaronShell(transaction)
+        navigator = MacaronShell(transaction, conn)
         navigator.cmdloop()
     except Exception:
         import pdb
