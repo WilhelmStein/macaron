@@ -369,22 +369,22 @@ class MacaronShell(cmd.Cmd):
                 elif current_encoding == 'mapping':
                     current_type_data = storage_layout['types'][current_type_data['value']]
                 elif current_encoding == 'dynamic_array':
-                    raise Exception('DYNAMIC ARRAY IDENTIFIER NOT CONFIGURED YET')
+                    current_type_data = storage_layout['types'][current_type_data['base']]
                 elif current_encoding == 'bytes':
                     raise Exception('BYTES IDENTIFIER NOT CONFIGURED YET')
                 else:
                     raise Exception(f'Error: Unknown encoding \'{current_encoding}\' encountered during storage access')
 
                 found = False
-            
-                for member in current_type_data['members']:
-                    if member['label'] == instruction.value:
-                        current_address += int(member['slot'])
-                        current_type_data = storage_layout['types'][member['type']]
-                        current_encoding = current_type_data['encoding']
-                        current_offset = int(member['offset'])
-                        found = True
-                        break
+                if 'members' in current_type_data:
+                    for member in current_type_data['members']:
+                        if member['label'] == instruction.value:
+                            current_address += int(member['slot'])
+                            current_type_data = storage_layout['types'][member['type']]
+                            current_encoding = current_type_data['encoding']
+                            current_offset = int(member['offset'])
+                            found = True
+                            break
 
                 if not found:
                     raise Exception(f'Could not find member {instruction.value}')
@@ -405,7 +405,8 @@ class MacaronShell(cmd.Cmd):
                 elif current_encoding == 'mapping':
                     current_address = int(Web3.solidityKeccak(['uint256', 'uint256'], [index_value, current_address]).hex(), base=16)
                 elif current_encoding == 'dynamic_array':
-                    current_address = int(Web3.solidityKeccak(['uint256'], [current_address]).hex(), base=16) + int(index_value)
+                    array_element_type_size = int(storage_layout['types'][current_type_data['base']]['numberOfBytes'])
+                    current_address = int(Web3.solidityKeccak(['uint256'], [current_address]).hex(), base=16) + int(index_value) * array_element_type_size // 32
                 elif current_encoding == 'bytes':
                     raise Exception('BYTES INDEXACCESS NOT CONFIGURED YET')
                 else:
@@ -417,11 +418,16 @@ class MacaronShell(cmd.Cmd):
             final_address = Web3.toHex(current_address)[2:]
             final_address = final_address.zfill(65 - len(final_address))
 
+
             # Use offset for tightly packed variables
             accessed_value = self.contract_trace[self.contract_index].steps[self.step_index].persistant_data[final_address][64 - (current_offset + int(current_type_data['numberOfBytes']) ) * 2 : 64 - current_offset * 2]
             
+
             # TODO Add different printing accoring to type
-            return_value = int(accessed_value, base=16)
+            if current_type_data['label'] == 'address' or current_type_data['label'].split(' ')[0] == 'contract':
+                return_value = hex(int(accessed_value, base=16))
+            else:
+                return_value = int(accessed_value, base=16)
 
             return return_value
         except KeyError:
@@ -459,8 +465,10 @@ if __name__ == '__main__':
         
 
         # Local Tests
-        transaction = '0x5b2cbbfc8b6b0c46bba5c36d25e6d153d0ea5f3ff543d536cb2829f01c11de3c' # Storage Write
-        # transaction = '0x769192d516a9ce1d3250c7ab5984eadf57792842032577dc55f90698758238e0' # Storage Read
+        transaction = '0x291d26ca20c289da4ea549ed95a9228b4811c06a6df7cdd848c4d27afe1b742b' # Storage Write
+        transaction = '0xde360948210245dbce9f09ae49eb097ceb80c21e3bfd2c79aa4b0af1a7c0493e' # Storage Read
+
+        # transaction = '0x7f444e65cc26c4eae2b0fe66b7cbe9f5b83b8befa23dc7f46f9d22d516d20129' # Send ticket
 
         navigator = MacaronShell(transaction, conn)
         navigator.cmdloop()
