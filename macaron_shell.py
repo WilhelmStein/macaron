@@ -5,6 +5,8 @@ from trace_transaction import calculate_trace_display
 from expression_parser import parse_expression, StateCode
 from web3 import Web3
 
+# import cProfile, pstats, io
+
 class MacaronShell(cmd.Cmd):
 
     color_normal = '\033[31m\033[40m'
@@ -450,27 +452,45 @@ if __name__ == '__main__':
         #     raise Exception('Usage: python3 macaron_shell.py TRANSACTION')
 
 
-        # conn = pymysql.connect(
-        #     host="127.0.0.1",
-        #     port=int(3307),
-        #     user="tracer",
-        #     passwd="a=$G5)Z]vqY6]}w{",
-        #     db="gigahorse",
-        #     read_timeout=int(3),
-        #     charset='utf8mb4')
-        conn = None
+        conn = pymysql.connect(
+            host="127.0.0.1",
+            port=int(3307),
+            user="tracer",
+            passwd="a=$G5)Z]vqY6]}w{",
+            db="gigahorse",
+            read_timeout=int(3),
+            charset='utf8mb4')
 
        # Mainnet Tests
         transaction = '0xa67c14e87755014e75f843aef3db09a5a2d8e54f746e6938b77ea1ccae1ccf2c' # Scheme Registrar v0.5.13
-        
+        transaction = '0x4bbea23a4cca98a5231854c48b4f31d71f7b437c681299d23957ebe63542f3fe' # RenBTC v0.5.16
+        transaction = '0x4ae860eb77a12e3f9a0b0bd83228d066f4249607b5840aa30ca324c77c3073ca' # KyberNetworkProxy v0.6.6 #TODO NOT WORKING CORRECTLY
+        transaction = '0x0f386cd63450bbcbe0d4a4da1354b96c7f1b4f1c6f8b2dcc12971c20aef26194' # KyberStorage v0.6.6
+        transaction = '0x99d3197f0149bf1dcfebec320f67704358564a768f2fa479342e954e7ec21dfa' # Kyber: Matching Engine v0.6.6
+        transaction = '0x080a77fa25c18a2cf11e305eddcca06bd47f70d0b3d683e370647aacb9ab8e54' # Bancor Finder v0.5.17 #TODO CREATION
+        transaction = '0xcf0cc27bb2c9f160c2ac90d419c7c741c58ba4f6e2c4d3546f02b72723985ca8' # Loihi v0.5.15 #TODO Index out of range when stepping
+        transaction = '0x3c5ae6d88316d96bc5b3632aa37dcc7bd1ffcc3217a3b83b36448f1b0f30c67c' # InitializableAdminUpgreadabilityProxy v0.5.14
 
         # Local Tests
-        transaction = '0x291d26ca20c289da4ea549ed95a9228b4811c06a6df7cdd848c4d27afe1b742b' # Storage Write
-        transaction = '0xde360948210245dbce9f09ae49eb097ceb80c21e3bfd2c79aa4b0af1a7c0493e' # Storage Read
+        # transaction = '0x291d26ca20c289da4ea549ed95a9228b4811c06a6df7cdd848c4d27afe1b742b' # Storage Write
+        # transaction = '0xde360948210245dbce9f09ae49eb097ceb80c21e3bfd2c79aa4b0af1a7c0493e' # Storage Read
 
         # transaction = '0x7f444e65cc26c4eae2b0fe66b7cbe9f5b83b8befa23dc7f46f9d22d516d20129' # Send ticket
 
+
+        # pr = cProfile.Profile()
+
+        # pr.enable()
         navigator = MacaronShell(transaction, conn)
+        # pr.disable()
+
+        # s = io.StringIO()
+        # sortby = 'cumulative'
+        # ps = pstats.Stats(pr, stream=s).strip_dirs().sort_stats(sortby)
+        # ps.print_stats()
+        # with open('profile.stats', 'w+') as f:
+        #     f.write(s.getvalue())
+
         navigator.cmdloop()
     except Exception:
         import pdb

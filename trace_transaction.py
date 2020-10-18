@@ -40,15 +40,14 @@ query_source = """
 
 
 validAstTypes = [   'ParameterList', 'ExpressionStatement', 'VariableDeclaration', 'VariableDeclarationStatement', 'Return', 'Assignment', 'Identifier',
-                    'BinaryOperation', 'Literal', 'MemberAccess', 'IndexAccess', 'FunctionCall', 'UnaryOperation', 'Continue', 'Break', 'Conditional']
+                    'BinaryOperation', 'Literal', 'MemberAccess', 'IndexAccess', 'FunctionCall', 'UnaryOperation', 'Continue', 'Break', 'Conditional', 'InlineAssembly']
 
 invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'DoWhileStatement', 'WhileStatement', 'ForStatement', 'IfStatement',
                    'FunctionDefinition', 'PlaceholderStatement']
 
-node_children_names = { 'parameters', 'statements', 'nodes', 'arguments', 'declarations', 'body', 'expression', 'leftHandSide', 'rightHandSide', 
-                        'leftExpression', 'rightExpression', 'initializationExpression', 'initialValue', 'value', 'expression', 'trueBody', 'falseBody', 
-                        'condition', 'baseExpression', 'indexExpression', 'loopExpression', 'returnParameters', 'subExpression', 'eventCall', 'components',
-                        'externalReferences', '_codeLength', '_addr'}
+node_children_names = { 'arguments', 'baseExpression', 'body', 'components', 'condition', 'declarations', 'expression', 'externalReferences', 'falseBody', 'falseExpression', 'modifiers', 'parameters', 'statements', 'nodes', 'leftHandSide', 'rightHandSide', 
+                        'leftExpression', 'rightExpression', 'initializationExpression', 'initialValue', 'value', 'trueBody', 'trueExpression', 'indexExpression', 'loopExpression', 'returnParameters',
+                        'subExpression', 'eventCall', '_codeLength', '_addr'}
 
 
 # TODO Cleanup
@@ -148,32 +147,39 @@ def __compile_solidity(code, compiler, optimization, other_settings, **kwargs):
     return (ast, contract)
 
 
-def __get_contract_from_db(contract_address, conn):
+def __get_contract_from_db(contract_address, conn, local_db_path = './local_contract_db'):
     """Connect to contract-lib.com and receive the contract's code. If the connection is None, then look locally."""
 
+    # First check the cache
+    if os.path.isdir(local_db_path):
+        if os.path.isdir(f'{local_db_path}/{contract_address}'):
+            if os.path.isfile(f'{local_db_path}/{contract_address}/contract.pkl'):
+                with open(f'{local_db_path}/{contract_address}/contract.pkl', 'rb') as contract_file:
+                    return pickle.load(contract_file)
+
+
+    # If the cache does not contain the target contract, connect to the database
     if conn:
         res = pd.read_sql_query(query_source%contract_address, conn)
         if len(res) == 0:
             return None
-        for i, row in res.iterrows():
+        for _, row in res.iterrows():
             if sum(v is None for v in row.values) > 1:
                 return None
-            return row
-    else:
-        if os.path.isdir('./local_contract_db'):
-            if os.path.isdir(f'./local_contract_db/{contract_address}'):
+            
+            if not os.path.exists(local_db_path):
+                os.makedirs(local_db_path)
 
-                with open(f'./local_contract_db/{contract_address}/code', 'r') as code_file:
-                    code = code_file.read()
-                
-                with open(f'./local_contract_db/{contract_address}/contract_name', 'r') as contract_name_file:
-                    contract_name = contract_name_file.read()
-                    
-                return {'code': code, 'contract_name': contract_name, 'compiler': 'v0.5.14+commit.01f1aaa4', 'optimization': 'Yes with 200 runs' , 'other_settings': 'byzantium'}
-            else:
-                return None
-        else:
-            return None
+            if not os.path.exists(f'{local_db_path}/{contract_address}'):
+                os.makedirs(f'{local_db_path}/{contract_address}')
+
+            with open(f'{local_db_path}/{contract_address}/contract.pkl', 'wb') as contract_file:
+                pickle.dump(row, contract_file)
+            
+            return row
+    
+    return None           
+    # return {'code': code, 'contract_name': contract_name, 'compiler': 'v0.5.14+commit.01f1aaa4', 'optimization': 'Yes with 200 runs' , 'other_settings': 'byzantium'} for tests
 
 
 def __compile_contract(stack_entry_folder, contract_wrapper):
@@ -182,7 +188,7 @@ def __compile_contract(stack_entry_folder, contract_wrapper):
         ast_path = f"{stack_entry_folder}/ast.pkl"
         solidity_file_path = f"{stack_entry_folder}/solidity_file.pkl"
 
-        if os.path.exists(stack_entry_folder):
+        if os.path.exists(stack_entry_folder) and os.path.exists(ast_path) and os.path.exists(solidity_file_path):
             with open(ast_path, "rb") as f:
                 ast = pickle.load(f)
             
@@ -194,7 +200,8 @@ def __compile_contract(stack_entry_folder, contract_wrapper):
             if ast is None:
                 return (None, solidity_file)
 
-            os.makedirs(stack_entry_folder)
+            if not os.path.exists(stack_entry_folder):
+                os.makedirs(stack_entry_folder)
 
             with open(ast_path,"wb") as f:
                 pickle.dump(ast,f)
@@ -224,7 +231,7 @@ def __list_children(ast):
             if isinstance(ast[name], Mapping):
                 nodes.append(ast[name])
             else:
-                nodes += ast[name] # Lists can contain None Elements (for some inexplicable reason!)
+                nodes += ast[name] # TODO Lists can contain None Elements (for some inexplicable reason!)
     
     return nodes
 
@@ -245,6 +252,12 @@ def __search_ast(wrapper, fro, length, source_index):
             output_node = (ast, lineage)
         elif curr_node_s + curr_node_r < fro or curr_node_s > fro + length: # A small optimization, as to avoid a full dfs of the ast
             return None
+
+    # Be lax with inline assembly, since the solc isn't very verbose when it comes to it
+    # Perhaps create custom nodes since the compiler won't do it for us
+    if 'nodeType' in ast and ast['nodeType'] == 'InlineAssembly':
+        return (ast, lineage)
+
 
     nodes = __list_children(ast)
             
@@ -378,7 +391,7 @@ def __group_instructions(instruction_node_list, storage_layout): # TODO Fix cert
     return output_list
 
 
-def calculate_trace_display(stack, conn):
+def calculate_trace_display(stack, conn = None, local_db_path = './local_contract_db'):
     """Renders a trace in human-readable format."""
     StepWrapper = namedtuple('StepWrapper', ['function_id', 'code', 'persistant_data', 'debug_info', 'marking'])
     ContractWrapper = namedtuple('ContractWrapper', ['address', 'reason', 'steps', 'storage_layout'])
@@ -387,8 +400,7 @@ def calculate_trace_display(stack, conn):
 
     for stack_entry in stack.trace:
         current_step_code = f"{color_normal}{'#'*80}\nEVM is running code at {stack_entry.address}. Reason: {stack_entry.reason}\n"
-        # print(current_step_code)
-        res = __get_contract_from_db(stack_entry.address, conn)
+        res = __get_contract_from_db(stack_entry.address, conn, local_db_path)
 
         if res is None:
             current_step_code += "Source not found in db, skipping..."
@@ -400,7 +412,7 @@ def calculate_trace_display(stack, conn):
         contract_name = res['contract_name']
 
 
-        stack_entry_folder = f"{stack.starting_transaction}/{stack_entry[0]}"
+        stack_entry_folder = f"{local_db_path}/{stack_entry[0]}"
         ast = solidity_file = None
         
         # Compile contract that corresponds to current stack entry
@@ -413,15 +425,21 @@ def calculate_trace_display(stack, conn):
 
         contract = solidity_file[contract_name]
         source_map = contract['evm']['deployedBytecode']['sourceMap']
-        object = contract['evm']['deployedBytecode']['object']
-        storage_layout = contract['storageLayout']
+        bytecode_object = contract['evm']['deployedBytecode']['object']
+
+
+        if 'storageLayout' in contract:
+            storage_layout = contract['storageLayout']
+        else:
+            current_step_code += "WARNING: No storage layout could be produced for this contract.\n"
+            storage_layout = None
 
         # Match instructions to the ast nodes that they belong to
         pc = 0
         instruction_node_list = []
         for idx, s in enumerate(source_map.split(';')):
 
-            opcode = int(object[pc * 2] + object[pc * 2 + 1], 16)
+            opcode = int(bytecode_object[pc * 2] + bytecode_object[pc * 2 + 1], 16)
 
             if s:
                 s_split = s.split(':')

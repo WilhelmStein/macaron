@@ -3,3 +3,4 @@
 __pycache__
 env
 local_contract_db
+local_testing_db
