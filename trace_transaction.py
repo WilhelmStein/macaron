@@ -179,7 +179,6 @@ def __get_contract_from_db(contract_address, conn, local_db_path = './local_cont
             return row
     
     return None           
-    # return {'code': code, 'contract_name': contract_name, 'compiler': 'v0.5.14+commit.01f1aaa4', 'optimization': 'Yes with 200 runs' , 'other_settings': 'byzantium'} for tests
 
 
 def __compile_contract(stack_entry_folder, contract_wrapper):
@@ -526,18 +525,5 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
                 step_counter += 1
             
         contract_trace.append(ContractWrapper(stack_entry.address , stack_entry.reason.split(' '), step_trace, storage_layout))
-
-    # After all the trace visualization data are calculated, make sure that the contract storage data are inherited downwards, moving through the contract
-    storage_per_contract = defaultdict(dict)
-
-    for contract in contract_trace:
-        storage_until_now = storage_per_contract[contract.address]
-
-        for step in contract.steps:
-            step.persistant_data.update(storage_until_now)
-            storage_until_now = deepcopy(step.persistant_data)
-
-        storage_per_contract[contract.address] = deepcopy(storage_until_now)
-        pass
         
     return contract_trace

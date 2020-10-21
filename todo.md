@@ -5,30 +5,29 @@
   - [x] Map AST Nodes to source
 
 - [ ] Contract data visualization
-  - [ ] Contract Storage
-    - [ ] Create solidity evaluator to check continuity
-    - [ ] Reverse engineer Bytecode on sstore instructions
-      - [ ] Arrays
-      - [x] Mappings 
-      - [x] Identifiers
-    - [ ] Reverse engineer Bytecode on sload instructions
-      - [ ] Arrays
-      - [ ] Mappings 
-      - [ ] Identifiers
-  - [ ] Call data
+  - [x] Implement storage display for:
+    - [x] Arrays
+    - [x] Mappings
+    - [x] Structs
+    - [x] Bytes and String
+    - [x] Identifiers
+  - [ ] Call data Visualization
   - [ ] Higher Level View (Function call level)
 
 - [ ] Implement Navigation
   - [x]  Group mappings into steps
   - [x]  Shell UI implementation
   - [x] Basic Navigation
-  - [ ] Step Up Functionality
+  - [ ] Reimplement Step Up Functionality
   - [ ] Step Over Functionality
 
 - [ ] Polishing
   - [x] Easier deployment
   - [x] Aliasing system  
   - [ ] Scroll functionality
-  - [ ] Better display of storage contents
+  - [x] Better display of storage contents
   - [ ] Fix bytecode to source mismappings
+    - [ ] Handle inline assembly
+    - [ ] Ongoing
+  - [x] Caching 
 

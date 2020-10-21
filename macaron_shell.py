@@ -208,11 +208,13 @@ class MacaronShell(cmd.Cmd):
         '''Load a transaction from alias or address'''
         if arg[0:2] == "0x":
             self.contract_trace = self.prepare_transaction(arg)
+            self.refresh = True
         else:
             aliases = self.load_pickle('transaction_aliases.pkl', 'rb')
             
             try:
                 self.contract_trace = self.prepare_transaction(aliases[arg])
+                self.refresh = True
             except KeyError:
                 print(f'Error: Could not find transaction alias \'{arg}\'')
 
@@ -303,7 +305,7 @@ class MacaronShell(cmd.Cmd):
     def prepare_transaction(self, transaction_address):
         '''Calculate all transaction display data'''
         stack = evm_stack.EVMExecuctionStack()
-        stack.import_transaction(transaction, self.rpc_endpoint)
+        stack.import_transaction(transaction_address, self.rpc_endpoint)
         self.contract_index = self.step_index = 0
         return calculate_trace_display(stack, self.database_connection)
 
@@ -319,6 +321,7 @@ class MacaronShell(cmd.Cmd):
     def reload_transaction(self):
         if self.current_transaction:
             self.contract_trace = self.prepare_transaction(self.current_transaction)
+            self.refresh = True
         else:
             print('No transaction currently loaded.')
 
@@ -373,7 +376,7 @@ class MacaronShell(cmd.Cmd):
                 elif current_encoding == 'dynamic_array':
                     current_type_data = storage_layout['types'][current_type_data['base']]
                 elif current_encoding == 'bytes':
-                    raise Exception('BYTES IDENTIFIER NOT CONFIGURED YET')
+                    raise Exception(f'Bytes type has no member {instruction.value}')
                 else:
                     raise Exception(f'Error: Unknown encoding \'{current_encoding}\' encountered during storage access')
 
@@ -410,24 +413,57 @@ class MacaronShell(cmd.Cmd):
                     array_element_type_size = int(storage_layout['types'][current_type_data['base']]['numberOfBytes'])
                     current_address = int(Web3.solidityKeccak(['uint256'], [current_address]).hex(), base=16) + int(index_value) * array_element_type_size // 32
                 elif current_encoding == 'bytes':
-                    raise Exception('BYTES INDEXACCESS NOT CONFIGURED YET')
+                    # current_address = int(Web3.solidityKeccak(['uint256'], [current_address]).hex(), base=16) + int(index_value) # For > 31 bytes
+                    pass 
                 else:
                     raise Exception(f'Error: Unknown encoding \'{current_encoding}\' encountered during storage access')
 
 
         try:
             # Stringify the final address to access and add the necessary padding
-            final_address = Web3.toHex(current_address)[2:]
-            final_address = final_address.zfill(65 - len(final_address))
-
+            final_address = self.int_to_hex_addr(current_address)
 
             # Use offset for tightly packed variables
-            accessed_value = self.contract_trace[self.contract_index].steps[self.step_index].persistant_data[final_address][64 - (current_offset + int(current_type_data['numberOfBytes']) ) * 2 : 64 - current_offset * 2]
+            accessed_value = self.value_at_storage_address(final_address, current_offset, current_type_data)
             
 
-            # TODO Add different printing accoring to type
             if current_type_data['label'] == 'address' or current_type_data['label'].split(' ')[0] == 'contract':
                 return_value = hex(int(accessed_value, base=16))
+            elif current_encoding == 'bytes':
+                bytes_over_31 = True if int(accessed_value[-1], base=16) % 2 else False
+
+                # Load the whole byte array
+                if bytes_over_31:
+                    bytes_length = (int(accessed_value, base=16) - 1) // 2
+                    array_address = int(Web3.solidityKeccak(['uint256'], [current_address]).hex(), base=16)
+                    read_bytes = 0
+                    
+                    byte_array = ""
+                    while read_bytes < bytes_length:
+                        stringified_address = self.int_to_hex_addr(array_address + read_bytes // 32)
+                        byte_array += self.value_at_storage_address(stringified_address, current_offset, current_type_data)  
+                        read_bytes += 32
+                    
+                    byte_array = byte_array[: 2 * bytes_length]                    
+
+                else:
+                    bytes_length = int(accessed_value[-2:], base=16) // 2
+                    byte_array = accessed_value[:2 * bytes_length]
+                
+                
+                if current_type_data['label'] == "string":
+                    byte_array = bytes.fromhex(byte_array).decode("utf-8")
+                else:
+                    byte_array = [ (elem1 + elem2).encode() for elem1, elem2 in zip(*[iter(byte_array)] * 2) ]
+                
+
+                # Choose which part to show
+                if instruction.code == StateCode.Identifier:
+                    return_value = byte_array
+                elif instruction.code == StateCode.IndexAccess:
+                    return_value = byte_array[index_value]
+                else:
+                    raise Exception(f'Error: Unknown StateCode {instruction.code} encountered.')
             else:
                 return_value = int(accessed_value, base=16)
 
@@ -435,6 +471,16 @@ class MacaronShell(cmd.Cmd):
         except KeyError:
             print(f'Nothing to access in storage area {final_address}')
             return '?'
+
+    
+    def value_at_storage_address(self, address, offset, type_data):
+        return self.contract_trace[self.contract_index].steps[self.step_index].persistant_data[address][64 - (offset + int(type_data['numberOfBytes']) ) * 2 : 64 - offset * 2]
+
+
+    def int_to_hex_addr(self, address):
+        address = Web3.toHex(address)[2:]
+        return address.zfill(65 - len(address))
+
         
     def get_current_step(self):
         return self.contract_trace[self.contract_index].steps[self.step_index]
@@ -452,17 +498,18 @@ if __name__ == '__main__':
         #     raise Exception('Usage: python3 macaron_shell.py TRANSACTION')
 
 
-        conn = pymysql.connect(
-            host="127.0.0.1",
-            port=int(3307),
-            user="tracer",
-            passwd="a=$G5)Z]vqY6]}w{",
-            db="gigahorse",
-            read_timeout=int(3),
-            charset='utf8mb4')
+        # conn = pymysql.connect(
+        #     host="127.0.0.1",
+        #     port=int(3307),
+        #     user="tracer",
+        #     passwd="a=$G5)Z]vqY6]}w{",
+        #     db="gigahorse",
+        #     read_timeout=int(3),
+        #     charset='utf8mb4')
 
        # Mainnet Tests
         transaction = '0xa67c14e87755014e75f843aef3db09a5a2d8e54f746e6938b77ea1ccae1ccf2c' # Scheme Registrar v0.5.13
+
         transaction = '0x4bbea23a4cca98a5231854c48b4f31d71f7b437c681299d23957ebe63542f3fe' # RenBTC v0.5.16
         transaction = '0x4ae860eb77a12e3f9a0b0bd83228d066f4249607b5840aa30ca324c77c3073ca' # KyberNetworkProxy v0.6.6 #TODO NOT WORKING CORRECTLY
         transaction = '0x0f386cd63450bbcbe0d4a4da1354b96c7f1b4f1c6f8b2dcc12971c20aef26194' # KyberStorage v0.6.6
@@ -471,9 +518,11 @@ if __name__ == '__main__':
         transaction = '0xcf0cc27bb2c9f160c2ac90d419c7c741c58ba4f6e2c4d3546f02b72723985ca8' # Loihi v0.5.15 #TODO Index out of range when stepping
         transaction = '0x3c5ae6d88316d96bc5b3632aa37dcc7bd1ffcc3217a3b83b36448f1b0f30c67c' # InitializableAdminUpgreadabilityProxy v0.5.14
 
-        # Local Tests
-        # transaction = '0x291d26ca20c289da4ea549ed95a9228b4811c06a6df7cdd848c4d27afe1b742b' # Storage Write
-        # transaction = '0xde360948210245dbce9f09ae49eb097ceb80c21e3bfd2c79aa4b0af1a7c0493e' # Storage Read
+        # Debug Tests
+        transaction = '0x247357d9bdac0ddb6fd26641090aad59595c6cd6ec2e89fae16fc3cbdafeb2cb' # Storage Write
+        # transaction = '' # Storage Read
+        transaction = '0x58b51b4918fbc9f31f026c9eb1494b96af8ad024bfb3603d5aa8a47efb745929' # Rename Slot
+        transaction = '0x02c9962e1f1f7509704d245af56df099e8a8ff458e94a60320ac9bac141d470f' # Rename Slot with more than 31 bytes
 
         # transaction = '0x7f444e65cc26c4eae2b0fe66b7cbe9f5b83b8befa23dc7f46f9d22d516d20129' # Send ticket
 
@@ -481,7 +530,7 @@ if __name__ == '__main__':
         # pr = cProfile.Profile()
 
         # pr.enable()
-        navigator = MacaronShell(transaction, conn)
+        navigator = MacaronShell(transaction)
         # pr.disable()
 
         # s = io.StringIO()
