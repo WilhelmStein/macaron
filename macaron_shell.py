@@ -498,14 +498,14 @@ if __name__ == '__main__':
         #     raise Exception('Usage: python3 macaron_shell.py TRANSACTION')
 
 
-        # conn = pymysql.connect(
-        #     host="127.0.0.1",
-        #     port=int(3307),
-        #     user="tracer",
-        #     passwd="a=$G5)Z]vqY6]}w{",
-        #     db="gigahorse",
-        #     read_timeout=int(3),
-        #     charset='utf8mb4')
+        conn = pymysql.connect(
+            host="127.0.0.1",
+            port=int(3307),
+            user="tracer",
+            passwd="a=$G5)Z]vqY6]}w{",
+            db="gigahorse",
+            read_timeout=int(3),
+            charset='utf8mb4')
 
        # Mainnet Tests
         transaction = '0xa67c14e87755014e75f843aef3db09a5a2d8e54f746e6938b77ea1ccae1ccf2c' # Scheme Registrar v0.5.13
@@ -519,10 +519,10 @@ if __name__ == '__main__':
         transaction = '0x3c5ae6d88316d96bc5b3632aa37dcc7bd1ffcc3217a3b83b36448f1b0f30c67c' # InitializableAdminUpgreadabilityProxy v0.5.14
 
         # Debug Tests
-        transaction = '0x247357d9bdac0ddb6fd26641090aad59595c6cd6ec2e89fae16fc3cbdafeb2cb' # Storage Write
+        # transaction = '0x247357d9bdac0ddb6fd26641090aad59595c6cd6ec2e89fae16fc3cbdafeb2cb' # Storage Write
         # transaction = '' # Storage Read
-        transaction = '0x58b51b4918fbc9f31f026c9eb1494b96af8ad024bfb3603d5aa8a47efb745929' # Rename Slot
-        transaction = '0x02c9962e1f1f7509704d245af56df099e8a8ff458e94a60320ac9bac141d470f' # Rename Slot with more than 31 bytes
+        # transaction = '0x58b51b4918fbc9f31f026c9eb1494b96af8ad024bfb3603d5aa8a47efb745929' # Rename Slot
+        # transaction = '0x02c9962e1f1f7509704d245af56df099e8a8ff458e94a60320ac9bac141d470f' # Rename Slot with more than 31 bytes
 
         # transaction = '0x7f444e65cc26c4eae2b0fe66b7cbe9f5b83b8befa23dc7f46f9d22d516d20129' # Send ticket
 
