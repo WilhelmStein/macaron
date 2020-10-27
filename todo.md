@@ -28,6 +28,5 @@
   - [x] Better display of storage contents
   - [ ] Fix bytecode to source mismappings
     - [ ] Handle inline assembly
-    - [ ] Ongoing
   - [x] Caching 
 

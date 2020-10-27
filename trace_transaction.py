@@ -11,24 +11,8 @@ from copy import deepcopy
 import os.path
 import pickle
 import functools
-from solidity_evaluator import opcodes, evaluate
+from macaron_utils import *
 
-
-# Globals
-LINE_SPLIT_DELIMETER = '\n'
-
-color_normal = '\033[31m\033[40m'
-color_highlight = '\033[30m\033[107m'
-color_warning = '\033[30m\033[106m'
-
-
-query_decompiled = """
-  select d.source_level, d.debug
-  from address a
-  join decompiled_code d on a.md5_bytecode = d.md5_bytecode
-  where a.address = '%s'
-  and a.network = 'Ethereum'
-"""
 
 query_source = """
   select b.hex_bytecode, d.*
@@ -38,17 +22,6 @@ query_source = """
   where a.address = '%s'
   and a.network = 'Ethereum'
 """
-
-
-validAstTypes = [   'ParameterList', 'ExpressionStatement', 'VariableDeclaration', 'VariableDeclarationStatement', 'Return', 'Assignment', 'Identifier',
-                    'BinaryOperation', 'Literal', 'MemberAccess', 'IndexAccess', 'FunctionCall', 'UnaryOperation', 'Continue', 'Break', 'Conditional', 'InlineAssembly']
-
-invalidAstTypes = ['PragmaDirective', 'ContractDefinition', 'EventDefinition', 'DoWhileStatement', 'WhileStatement', 'ForStatement', 'IfStatement',
-                   'FunctionDefinition', 'PlaceholderStatement']
-
-node_children_names = { 'arguments', 'baseExpression', 'body', 'components', 'condition', 'declarations', 'expression', 'externalReferences', 'falseBody', 'falseExpression', 'modifiers', 'parameters', 'statements', 'nodes', 'leftHandSide', 'rightHandSide', 
-                        'leftExpression', 'rightExpression', 'initializationExpression', 'initialValue', 'value', 'trueBody', 'trueExpression', 'indexExpression', 'loopExpression', 'returnParameters',
-                        'subExpression', 'eventCall', '_codeLength', '_addr'}
 
 
 # TODO Cleanup
@@ -276,33 +249,15 @@ def __search_ast(wrapper, fro, length, source_index):
     return output_node
 
 
-def __remove_consecutives(node_list):
-    """Remove consecutive entries from a given list."""
-
-    prevNode = None
-    output_list = []
-
-    for node in node_list:
-        if prevNode == node:
-            continue
-        prevNode = node
-        output_list.append(node)
-    
-    return output_list
-
-
-# TODO Fix certain function calls not being recorded
-# TODO Check loop grouping, as they seem to be activated only once
 def __group_instructions(instruction_node_list, storage_layout):
     """Try to group bytecode instructions that correspond to the same solidity instruction"""
     
     output_list = []
-    # var_values = {}
     grouped_nodes = {}
     scope_node = None
     marking = ''
     
-    for instruction_node_idx, (opcode, persistant_data, node_wrapper) in enumerate(instruction_node_list):
+    for instruction_node_idx, (opcode, data, node_wrapper) in enumerate(instruction_node_list):
         # TODO Optimize
 
         # Ascertain current node's scope (if applicable) by taking a look at its lineage
@@ -321,12 +276,11 @@ def __group_instructions(instruction_node_list, storage_layout):
         # Ignore nodes with invalid scopes and greate groups between JUMP instructions
         if not scope_node:
             continue
-        elif opcode == opcodes['JUMPI'].value or opcode == opcodes['JUMP'].value: #TODO Check modifiers being ignored, possible culprit is how they are implemented by solidity
-            output_list.append((scope_node, grouped_nodes, persistant_data.storage, marking))
+        elif opcode == opcodes['JUMPI'] or opcode == opcodes['JUMP']: #TODO Check modifiers being ignored, possible culprit is how they are implemented by solidity
+            output_list.append((scope_node, grouped_nodes, data.storage, marking))
             marking = ''
-            # var_values = {}
             grouped_nodes = {}
-        elif opcode == opcodes['JUMPDEST'].value:
+        elif opcode == opcodes['JUMPDEST']:
             # Do not group JUMPDEST instructions, as they only confuse the display process and their display is unnecessary
             # JUMPDEST instructions should only be used to denote function entry, because the stepping-up functionality requires it
             if node['nodeType'] == 'FunctionDefinition':
@@ -338,7 +292,7 @@ def __group_instructions(instruction_node_list, storage_layout):
             grouped_nodes[node['id']] = node
 
     if grouped_nodes:
-        output_list.append((scope_node, grouped_nodes, persistant_data.storage, marking))
+        output_list.append((scope_node, grouped_nodes, data.storage, marking))
 
     return output_list
 
@@ -347,6 +301,8 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
     """Renders a trace in human-readable format."""
     StepWrapper = namedtuple('StepWrapper', ['function_id', 'code', 'persistant_data', 'debug_info', 'marking'])
     ContractWrapper = namedtuple('ContractWrapper', ['address', 'reason', 'steps', 'storage_layout'])
+    PcData = namedtuple('PcData', ['opcode', 'source_mapping', 'ast_node_mapping'])
+    SourceMapping = namedtuple('SourceMapping', ['source_from', 'source_range', 'source_index'])
 
     contract_trace = []
 
@@ -402,47 +358,68 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
         else:
             current_step_code += "WARNING: No storage layout could be produced for this contract.\n"
             storage_layout = None
-            
 
-        # Match instructions to the ast nodes that they belong to
+        
         pc = 0
-        instruction_node_list = []
-        for idx, s in enumerate(source_map.split(';')):
+        pc_to_data = {}
 
-            opcode = int(bytecode_object[pc * 2] + bytecode_object[pc * 2 + 1], 16)
-
-            if s:
-                s_split = s.split(':')
-                if s_split[0]:
-                    fro = int(s_split[0])
-
-                if len(s_split) > 1 and s_split[1]:
-                    length = int(s_split[1])
+        # Decompress source map and create a mapping from the pc to relevant static data
+        try: 
+            for source_mapping in source_map.split(';'):
+                opcode = int(bytecode_object[pc * 2] + bytecode_object[pc * 2 + 1], 16)
                 
-                if len(s_split) > 2 and s_split[2]:
-                    source_index = int(s_split[2])
+                if source_mapping:
+                    source_split = source_mapping.split(':')
+                    if source_split[0]:
+                        source_from = int(source_split[0])
+
+                    if len(source_split) > 1 and source_split[1]:
+                        source_range = int(source_split[1])
+                    
+                    if len(source_split) > 2 and source_split[2]:
+                        source_index = int(source_split[2])
 
 
-            # Filter out all instructions that were not part of the trace
-            if pc in stack.instructions[stack_entry]:                
-                if __valid_source(ast, fro, length, source_index):
-                    ast_node = __search_ast((ast, []), fro, length, source_index)
-
-                    if ast_node is None:
-                        print(f"Could not find ast node from source mapping: {fro} : {length} : {source_index}")
-                    else:
-                        instruction_node_list.append( (stack.instructions_order[stack_entry][pc], opcode, stack.data_at_instruction[stack_entry][pc], ast_node) )
-                elif source_index != -1: # -1 is reserved for code the compiler adds
-                    print(f'Invalid source mapping: {fro} : {length} : {source_index}')     
-                        
-            # it's a push instruction, increment by extra size of instruction
-            if 0x60 <= opcode < 0x80:
-                pc += (opcode - 0x5f)
-            pc += 1
+                pc_to_data[pc] = PcData(opcode, SourceMapping(source_from, source_range, source_index), None)
 
 
-        # Sort the list and clip the node ordering
-        instruction_node_list = list(map(lambda a: (a[1], a[2], a[3]), sorted(instruction_node_list, key = lambda a: a[0])))
+                # it's a push instruction, increment by extra size of instruction
+                if 0x60 <= opcode < 0x80:
+                    pc += (opcode - 0x5f)
+                pc += 1
+
+        except Exception as e:
+            current_step_code += f'{color_error}Error: Could not decompress source map. Encountered exception: {e}{color_normal}'
+            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(0, current_step_code, {}, [], ('',''))], {} ))
+            continue
+
+        
+        # Search for node mappings for each step of the trace
+        instruction_node_list = []
+        for instruction_entry in stack.instructions[stack_entry]:
+            pc_data = pc_to_data[instruction_entry.pc]
+
+            source_from, source_length, source_index = list(pc_data.source_mapping)
+            
+            if pc_data.ast_node_mapping:
+                ast_node = pc_data.ast_node_mapping
+            elif __valid_source(ast, source_from, source_length, source_index):
+                ast_node = __search_ast((ast, []), source_from, source_length, source_index)
+                
+                # Use ._replace() because namedtuples are immutable
+                pc_to_data[instruction_entry.pc] = pc_to_data[instruction_entry.pc]._replace(ast_node_mapping = ast_node)
+            elif source_index != -1: # -1 is reserved for code the compiler adds
+                print(f'Invalid source mapping: {source_from} : {source_length} : {source_index}')
+
+
+            if ast_node:
+                instruction_node_list.append( (pc_data.opcode, instruction_entry.data, ast_node) )
+                ast_node = None
+            elif source_index == -1:
+                pass
+            else:
+                current_step_code += f'{color_warning}Could not find ast node from source mapping: {source_from} : {source_length} : {source_index}{color_normal}'
+                
 
         line_index, char_index = __create_source_index(code)
         

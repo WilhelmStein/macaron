@@ -7,22 +7,24 @@ import pickle
 class EVMExecuctionStack:
     calls = {'CALL', 'CALLCODE', 'STATICCALL', 'DELEGATECALL', 'CREATE', 'CREATE2'}
     StackEntry = namedtuple('StackEntry', ['address', 'reason', 'vmstate'])
-    PersistantDataEntry = namedtuple('PersistantDataEntry', ['stack', 'storage', 'memory'])
+    InstructionEntry = namedtuple('InstructionEntry', ['pc', 'data'])
+    DataEntry = namedtuple('DataEntry', ['stack', 'storage', 'memory'])
     
+
     def __init__(self):
         self.stack = []
         self.trace = []
-        self.instructions = defaultdict(set)
+        self.instructions = defaultdict(list)
         self.instructions_order = defaultdict(lambda : defaultdict(lambda : 0xFFFF))
-        self.data_at_instruction = defaultdict(lambda : defaultdict(self.PersistantDataEntry))
-        self.order = 0
+        self.data_at_instruction = defaultdict(lambda : defaultdict(self.DataEntry))
+
 
     def entry(self, address):
         self.stack.append([address, 'ENTRY'])
         self.state = 0
-        self.order = 0
         self.do_trace()
         
+
     def do_trace(self):
         self.trace.append(self.StackEntry(*(self.stack[-1] + [self.state])))
 
@@ -30,19 +32,20 @@ class EVMExecuctionStack:
     def call(self, address, opcode):
         self.stack.append([address, opcode])
         self.state += 1
-        self.order = 0
         self.do_trace()
+
 
     def ret(self):
         self.stack.pop()
         self.stack[-1][1] = 'RETURN from previous contract'
         self.state += 1
-        self.order = 0
         self.do_trace()
+
 
     def head(self):
         return self.trace[-1]
-    
+
+
     def import_transaction(self, transaction, rpc_endpoint):
 
         self.entry(get_starting_contract(transaction, rpc_endpoint)[2:])
@@ -76,10 +79,7 @@ class EVMExecuctionStack:
             current_stack_entry = self.head()
             pc = t['pc']
 
-            self.instructions[current_stack_entry].add(pc)
-            self.instructions_order[current_stack_entry][pc] = min(self.instructions_order[current_stack_entry][pc], self.order)
-            self.data_at_instruction[current_stack_entry][pc] = self.PersistantDataEntry( t['stack'], t['storage'], t['memory'] )
-            self.order += 1
+            self.instructions[current_stack_entry].append(self.InstructionEntry(pc, self.DataEntry( t['stack'], t['storage'], t['memory'] )))
 
             if t['op'] in self.calls and transaction_trace[idx + 1]['depth'] != prev_depth:
                 # take next address from the stack, cast to 160-bits
