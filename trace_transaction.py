@@ -19,6 +19,7 @@ LINE_SPLIT_DELIMETER = '\n'
 
 color_normal = '\033[31m\033[40m'
 color_highlight = '\033[30m\033[107m'
+color_warning = '\033[30m\033[106m'
 
 
 query_decompiled = """
@@ -253,7 +254,7 @@ def __search_ast(wrapper, fro, length, source_index):
             return None
 
     # Be lax with inline assembly, since the solc isn't very verbose when it comes to it
-    # Perhaps create custom nodes since the compiler won't do it for us
+    # TODO Perhaps create custom nodes since the compiler won't do it for us
     if 'nodeType' in ast and ast['nodeType'] == 'InlineAssembly':
         return (ast, lineage)
 
@@ -287,59 +288,12 @@ def __remove_consecutives(node_list):
         prevNode = node
         output_list.append(node)
     
-    return output_list    
+    return output_list
 
 
-def __calculate_storage_variable_key(starting_index_access_count, node, instruction_node_list, instruction_node_idx):
-    """Calculate the storage variable name (key) for assigment expressions whose left hand expression contains indexing (array or map)"""
-    number_of_accesses = starting_index_access_count
-    var_value_key = ''
-    current_node = node['baseExpression']
-    
-    # Count how many index accesses there are
-    while True:
-        if current_node['nodeType'] == 'IndexAccess':
-            current_node = current_node['baseExpression']
-            number_of_accesses += 1
-        elif current_node['nodeType'] == 'Identifier':
-            var_value_key = current_node['name']
-            break
-        elif current_node['nodeType'] == 'MemberAccess':
-            current_node = current_node['expression']
-        else:
-            raise Exception(f'Error: Unknown node type {current_node["nodeType"]} encountered during storage inventory.')
-
-
-    access_count = 0
-    for i in range(instruction_node_idx - 1, -1, -1):
-
-        target_opcode, target_persistant_data, target_node = instruction_node_list[i]
-
-        # relevant SHA3 instruction found, assume that first SHA3 opcode encountered is correlated with the current SSTORE opcode
-        if access_count == number_of_accesses:
-            return var_value_key
-        elif target_opcode ==  opcodes['SHA3'].value: #and instruction_node_list[i + 1][1].stack[-1] == persistant_data.stack[-1]:
-            # sha3_offset = target_persistant_data.stack[-1]
-            # sha3_length = target_persistant_data.stack[-2]
-            # evaluate(target_persistant_data, ['SHA3'])
-            found_first_mstore = False
-            for j in range(i - 1, -1 , -1):
-                # search for mstores
-                target_opcode, target_persistant_data, target_node = instruction_node_list[j]
-
-                if target_opcode == opcodes['MSTORE'].value: #and target_persistant_data.stack[-1] == sha3_offset and target_persistant_data.stack[-2] == sha3_length:
-                    if found_first_mstore:
-                        # The second mstore found is the one concerning the index
-                        mstore_value = target_persistant_data.stack[-2]
-                        var_value_key += f'[{int(mstore_value, 16)}]'
-                        break
-                    else:
-                        # The first mstore found is the one concerning the variable slot
-                        found_first_mstore = True
-            access_count += 1
-    
-
-def __group_instructions(instruction_node_list, storage_layout): # TODO Fix certain function calls not being recorded
+# TODO Fix certain function calls not being recorded
+# TODO Check loop grouping, as they seem to be activated only once
+def __group_instructions(instruction_node_list, storage_layout):
     """Try to group bytecode instructions that correspond to the same solidity instruction"""
     
     output_list = []
@@ -385,7 +339,6 @@ def __group_instructions(instruction_node_list, storage_layout): # TODO Fix cert
 
     if grouped_nodes:
         output_list.append((scope_node, grouped_nodes, persistant_data.storage, marking))
-        marking = ''
 
     return output_list
 
@@ -397,26 +350,31 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
 
     contract_trace = []
 
+    # Each stack entry represents the call/return of/from a contract
     for stack_entry in stack.trace:
         current_step_code = f"{color_normal}{'#'*80}\nEVM is running code at {stack_entry.address}. Reason: {stack_entry.reason}\n"
         res = __get_contract_from_db(stack_entry.address, conn, local_db_path)
 
+
+        # If no trace of the contract's source is found on the selected local cache or node, skip this stack entry
         if res is None:
             current_step_code += "Source not found in db, skipping..."
             contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(0, current_step_code, {}, [], ('',''))], {} ))
             continue
 
 
-        code = res['code'].encode()
+        code = res['code'].encode() # UTF-8 encoding
         contract_name = res['contract_name']
 
 
         stack_entry_folder = f"{local_db_path}/{stack_entry[0]}"
         ast = solidity_file = None
         
+
         # Compile contract that corresponds to current stack entry
         ast, solidity_file = __compile_contract(stack_entry_folder, res)
 
+        # Handle old solc versions that do not make use of the new ast
         if solidity_file is None or ast is None:
             current_step_code += 'AST is empty or using legacyAST, which is not supported.'
             contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(0, current_step_code, {}, [], ('',''))], {} ))
@@ -427,11 +385,24 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
         bytecode_object = contract['evm']['deployedBytecode']['object']
 
 
+        # Bytecode divergence check
+        if 'hex_bytecode' in res:
+            if res['hex_bytecode'] == bytecode_object:
+                current_step_code += 'Bytecode matches exactly\n'
+            elif len(res['hex_bytecode']) == len(bytecode_object):
+                current_step_code += f"{color_warning}Bytecode does not match exactly, but has same length{color_normal}\n"
+            else:
+                current_step_code += f"{color_warning}Warning: Bytecode mismatch encountered{color_normal}\n"
+        else:
+            current_step_code += f"{color_warning}No bytecode was found for this contract{color_normal}\n"
+
+
         if 'storageLayout' in contract:
             storage_layout = contract['storageLayout']
         else:
             current_step_code += "WARNING: No storage layout could be produced for this contract.\n"
             storage_layout = None
+            
 
         # Match instructions to the ast nodes that they belong to
         pc = 0
@@ -479,6 +450,9 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
         step_counter = 0
         step_trace = []
         for idx, (scope_node, node_set, var_values, marking) in enumerate(__group_instructions(instruction_node_list, storage_layout)):
+            
+            #TODO Add debug argument check
+            current_step_code += f"DEBUG GROUP INDEX: {idx}\n"
 
             scope = scope_node['src']
             scope_f, scope_r, scope_l = map(int, scope.split(':'))
