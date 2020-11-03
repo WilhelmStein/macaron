@@ -211,6 +211,8 @@ def __list_children(ast):
 
 def __search_ast(wrapper, fro, length, source_index):
     """Recursive function that searches a given AST for a node with a specific source mapping."""
+    if not hasattr(__search_ast, "last_custom_node_id"):
+        __search_ast.last_custom_node_id = 0
     
     ast, lineage = wrapper
 
@@ -229,7 +231,13 @@ def __search_ast(wrapper, fro, length, source_index):
     # Be lax with inline assembly, since the solc isn't very verbose when it comes to it
     # TODO Perhaps create custom nodes since the compiler won't do it for us
     if 'nodeType' in ast and ast['nodeType'] == 'InlineAssembly':
-        return (ast, lineage)
+        __search_ast.last_custom_node_id += 1
+        custom_node = {
+            'id': __search_ast.last_custom_node_id,
+            'nodeType': 'CustomInlineAssemblyChild',
+            'src': f'{fro}:{length}:{source_index}'
+            }
+        return (custom_node, [ast] + lineage)
 
 
     nodes = __list_children(ast)
@@ -254,10 +262,11 @@ def __group_instructions(instruction_node_list, storage_layout):
     
     output_list = []
     grouped_nodes = {}
+    block_trace = []
     scope_node = None
     marking = ''
     
-    for instruction_node_idx, (opcode, data, node_wrapper) in enumerate(instruction_node_list):
+    for instruction_node_idx, (pc, opcode, data, node_wrapper) in enumerate(instruction_node_list):
         # TODO Optimize
 
         # Ascertain current node's scope (if applicable) by taking a look at its lineage
@@ -277,30 +286,49 @@ def __group_instructions(instruction_node_list, storage_layout):
         if not scope_node:
             continue
         elif opcode == opcodes['JUMPI'] or opcode == opcodes['JUMP']: #TODO Check modifiers being ignored, possible culprit is how they are implemented by solidity
-            output_list.append((scope_node, grouped_nodes, data.storage, marking))
+            output_list.append((scope_node, grouped_nodes, block_trace, data.storage, marking))
             marking = ''
             grouped_nodes = {}
+            block_trace = []
         elif opcode == opcodes['JUMPDEST']:
             # Do not group JUMPDEST instructions, as they only confuse the display process and their display is unnecessary
-            # JUMPDEST instructions should only be used to denote function entry, because the stepping-up functionality requires it
+            # JUMPDEST instructions should only be used to denote function entry-exit and loop entry-exit
             if node['nodeType'] == 'FunctionDefinition':
                 marking = 'FUNCTION_ENTRY'
             elif node['nodeType'] == 'FunctionCall':
                 marking = 'FUNCTION_EXIT'
+            else:
+                pass
             
         else:
             grouped_nodes[node['id']] = node
+        
+        block_trace.append( (pc, opcode) )
 
     if grouped_nodes:
-        output_list.append((scope_node, grouped_nodes, data.storage, marking))
+        output_list.append((scope_node, grouped_nodes, block_trace, data.storage, marking))
 
     return output_list
+
+def strip_cbor(bytecode):
+    assert(len(bytecode) % 2 == 0)
+
+    cbor_size = int(bytecode[len(bytecode) - 4 : ], 16)
+
+    stripped_bytecode = bytecode[ : len(bytecode) - 4 - cbor_size * 2 + 1]
+    cbor_object = bytecode[len(bytecode) - 4 - cbor_size * 2 : ]
+
+    return (stripped_bytecode, cbor_object)
 
 
 def calculate_trace_display(stack, conn = None, local_db_path = './local_contract_db'):
     """Renders a trace in human-readable format."""
+
     StepWrapper = namedtuple('StepWrapper', ['function_id', 'code', 'persistant_data', 'debug_info', 'marking'])
+    LoopWrapper = namedtuple('LoopWrapper', ['steps'])
+    FunctionWrapper = namedtuple('FunctionWrapper', ['steps'])
     ContractWrapper = namedtuple('ContractWrapper', ['address', 'reason', 'steps', 'storage_layout'])
+
     PcData = namedtuple('PcData', ['opcode', 'source_mapping', 'ast_node_mapping'])
     SourceMapping = namedtuple('SourceMapping', ['source_from', 'source_range', 'source_index'])
 
@@ -343,12 +371,15 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
 
         # Bytecode divergence check
         if 'hex_bytecode' in res:
-            if res['hex_bytecode'] == bytecode_object:
+            stripped_res_bytecode, _ = strip_cbor(res['hex_bytecode'])
+            stripped_compiled_bytecode, _ = strip_cbor(bytecode_object)
+
+            if stripped_res_bytecode == stripped_compiled_bytecode:
                 current_step_code += 'Bytecode matches exactly\n'
-            elif len(res['hex_bytecode']) == len(bytecode_object):
-                current_step_code += f"{color_warning}Bytecode does not match exactly, but has same length{color_normal}\n"
+            elif len(stripped_res_bytecode) == len(stripped_compiled_bytecode):
+                current_step_code += f"{color_warning}Warning: Bytecode does not match exactly, but has same length{color_normal}\n"
             else:
-                current_step_code += f"{color_warning}Warning: Bytecode mismatch encountered{color_normal}\n"
+                current_step_code += f"{color_error}Warning: Bytecode mismatch encountered{color_normal}\n"
         else:
             current_step_code += f"{color_warning}No bytecode was found for this contract{color_normal}\n"
 
@@ -413,7 +444,7 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
 
 
             if ast_node:
-                instruction_node_list.append( (pc_data.opcode, instruction_entry.data, ast_node) )
+                instruction_node_list.append( (instruction_entry.pc, pc_data.opcode, instruction_entry.data, ast_node) )
                 ast_node = None
             elif source_index == -1:
                 pass
@@ -426,13 +457,14 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
         # Highlight executed code
         step_counter = 0
         step_trace = []
-        for idx, (scope_node, node_set, var_values, marking) in enumerate(__group_instructions(instruction_node_list, storage_layout)):
+        
+        for idx, (scope_node, node_set, block_trace, storage_data, marking) in enumerate(__group_instructions(instruction_node_list, storage_layout)):
             
             #TODO Add debug argument check
             current_step_code += f"DEBUG GROUP INDEX: {idx}\n"
 
             scope = scope_node['src']
-            scope_f, scope_r, scope_l = map(int, scope.split(':'))
+            scope_f, scope_r, _ = map(int, scope.split(':'))
             highlighted_nodes = set()
             highlighted_indices = set()
             node_types = []
@@ -445,14 +477,14 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
 
                     if node['id'] not in highlighted_nodes:
                         highlighted_nodes.add(node['id'])
-                        node_f, node_r, node_l = map(int, node['src'].split(':'))
+                        node_f, node_r, _ = map(int, node['src'].split(':'))
                         highlighted_indices.update(range(node_f, node_f + node_r))
 
                 elif node['nodeType'] not in invalidAstTypes:
                     print(f"Warning: Unknown AST Node type: {node['nodeType']} encountered during mapping to source.")
             
             source_display = bytearray()
-
+            
             # Apply highlighting colors
             curr_color = color_normal
             for i in range(scope_f, scope_f + scope_r):
@@ -471,7 +503,7 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
             # Unless there was nothing to highlight, wrap all the data in a single step for the contract trace display
             if node_types:
                 current_step_code += f"step {step_counter}:\nline: {line_index[scope_f] + 1} : {source_display.decode()}{color_normal}\n"
-                step_trace.append(StepWrapper(scope_node['id'], current_step_code, var_values, node_types, marking))
+                step_trace.append(StepWrapper(scope_node['id'], current_step_code, storage_data, node_types, marking))
                 current_step_code = ""
                 step_counter += 1
             

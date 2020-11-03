@@ -10,7 +10,7 @@
     - [x] Mappings
     - [x] Structs
     - [x] Bytes and String
-    - [x] Identifiers
+    - [x] Identifiers 
   - [ ] Call data Visualization
   - [ ] Higher Level View (Function call level)
 
@@ -26,7 +26,7 @@
   - [x] Aliasing system  
   - [ ] Scroll functionality
   - [x] Better display of storage contents
-  - [ ] Fix bytecode to source mismappings
-    - [ ] Handle inline assembly
+  - [x] Fix bytecode to source mismappings
+    - [x] Handle inline assembly
   - [x] Caching 
 
