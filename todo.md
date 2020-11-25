@@ -11,6 +11,7 @@
     - [x] Structs
     - [x] Bytes and String
     - [x] Identifiers 
+  - [ ] Display storage changes between steps
   - [ ] Call data Visualization
   - [ ] Higher Level View (Function call level)
 
@@ -29,4 +30,6 @@
   - [x] Fix bytecode to source mismappings
     - [x] Handle inline assembly
   - [x] Caching 
-
+  - [ ] Loop Detection
+  - [x] Revamp part 1
+  - [ ] Revamp part 2

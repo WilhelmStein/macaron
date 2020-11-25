@@ -8,10 +8,13 @@ import solcx.install
 from collections import defaultdict, OrderedDict, Mapping, namedtuple
 from itertools import chain
 from copy import deepcopy
+from dataclasses import dataclass, field
 import os.path
 import pickle
 import functools
+import json
 from macaron_utils import *
+from web3 import Web3
 
 
 query_source = """
@@ -42,7 +45,7 @@ def __make_compiler_json(filename, optimization_enabled = False, optimization_ru
         'evmVersion': evmVersion, 
         'outputSelection': {
             "*": {
-                "*": [ 'evm.deployedBytecode.sourceMap', 'evm.deployedBytecode.object', 'storageLayout' ],
+                "*": [ 'metadata', 'evm.deployedBytecode.sourceMap', 'evm.deployedBytecode.object', 'storageLayout' ],
                 "": ["ast"]
             }
         }
@@ -271,25 +274,25 @@ def __group_instructions(instruction_node_list, storage_layout):
 
         # Ascertain current node's scope (if applicable) by taking a look at its lineage
         node, lineage = node_wrapper
-        if node['nodeType'] == 'ContractDefinition':
-            continue
-        elif node['nodeType'] in {'ModifierDefinition', 'FunctionDefinition'}:
-            scope_node = node
-        else:
-            for ancestor in lineage:
-                if ancestor['nodeType'] in {'ModifierDefinition', 'FunctionDefinition'}:
-                    scope_node = ancestor
-                    break
+
+        if opcode != opcodes['JUMPDEST']:
+
+            if node['nodeType'] == 'ContractDefinition':
+                scope_node = node # TODO Remove this
+            elif node['nodeType'] in {'ModifierDefinition', 'FunctionDefinition'}:
+                scope_node = node
+            else:
+                for ancestor in lineage:
+                    if ancestor['nodeType'] in {'ModifierDefinition', 'FunctionDefinition'}:
+                        scope_node = ancestor
+                        break
         
                     
         # Ignore nodes with invalid scopes and greate groups between JUMP instructions
         if not scope_node:
             continue
         elif opcode == opcodes['JUMPI'] or opcode == opcodes['JUMP']: #TODO Check modifiers being ignored, possible culprit is how they are implemented by solidity
-            output_list.append((scope_node, grouped_nodes, block_trace, data.storage, marking))
-            marking = ''
-            grouped_nodes = {}
-            block_trace = []
+            pass
         elif opcode == opcodes['JUMPDEST']:
             # Do not group JUMPDEST instructions, as they only confuse the display process and their display is unnecessary
             # JUMPDEST instructions should only be used to denote function entry-exit and loop entry-exit
@@ -299,6 +302,11 @@ def __group_instructions(instruction_node_list, storage_layout):
                 marking = 'FUNCTION_EXIT'
             else:
                 pass
+
+            output_list.append((scope_node, grouped_nodes, block_trace, data.storage, marking))
+            marking = ''
+            grouped_nodes = {}
+            block_trace = []
             
         else:
             grouped_nodes[node['id']] = node
@@ -310,61 +318,91 @@ def __group_instructions(instruction_node_list, storage_layout):
 
     return output_list
 
-def strip_cbor(bytecode):
-    assert(len(bytecode) % 2 == 0)
-
-    cbor_size = int(bytecode[len(bytecode) - 4 : ], 16)
-
-    stripped_bytecode = bytecode[ : len(bytecode) - 4 - cbor_size * 2 + 1]
-    cbor_object = bytecode[len(bytecode) - 4 - cbor_size * 2 : ]
-
-    return (stripped_bytecode, cbor_object)
-
 
 def calculate_trace_display(stack, conn = None, local_db_path = './local_contract_db'):
     """Renders a trace in human-readable format."""
 
-    StepWrapper = namedtuple('StepWrapper', ['function_id', 'code', 'persistant_data', 'debug_info', 'marking'])
-    LoopWrapper = namedtuple('LoopWrapper', ['steps'])
-    FunctionWrapper = namedtuple('FunctionWrapper', ['steps'])
+    @dataclass(init = True, repr = True)
+    class StepWrapper:
+        function_id: int = 0
+        code: str = ''
+        persistant_data: dict = field(default_factory=dict)
+        debug_info: list = field(default_factory=list)
+        block_trace: list = field(default_factory=list)
+        marking: 'typing.Any' = ('', '')
+        annotations: str = ''
+
     ContractWrapper = namedtuple('ContractWrapper', ['address', 'reason', 'steps', 'storage_layout'])
 
     PcData = namedtuple('PcData', ['opcode', 'source_mapping', 'ast_node_mapping'])
+    # ContractData = namedtuple('ContractData', ['address', 'ast', 'solidity_file', 'storage_layout'])
     SourceMapping = namedtuple('SourceMapping', ['source_from', 'source_range', 'source_index'])
+
+
+    # Compile all contracts encountered during the trace
+    contract_db = {}
+    function_db = {}
+
+    print("Compiling contracts:")
+    for stack_entry in stack.trace:
+
+        res = __get_contract_from_db(stack_entry.address, conn, local_db_path)
+        if res is None:
+            contract_db[stack_entry.address] = (None, None, None)
+            print(f"  - {stack_entry.address} => Could not find source in db")
+            continue
+        
+        ast, solidity_file = __compile_contract(f"{local_db_path}/{stack_entry.address}", res)
+
+        # Populate function db
+        for contract in solidity_file.values():
+            if 'metadata' not in contract:
+                continue
+
+            metadata = json.loads(contract['metadata'])
+            for entry in metadata['output']['abi']:
+                if entry['type'] == 'function':
+                    function_sig = f"{entry['name']}({','.join(map(lambda i: i['type'], entry['inputs']))})"
+                    function_db[Web3.keccak(text = function_sig)[:4].hex()[2:]] = {
+                        'signature': function_sig,
+                        'param_names': list(map(lambda i: i['name'], entry['inputs']))
+                    }
+
+        if solidity_file is None or ast is None:
+            contract_db[stack_entry.address] = (res, None, None)
+            print(f"  - {stack_entry.address} => Compilation error/incompatible ast")
+            continue
+        
+        contract_db[stack_entry.address] = (res, ast, solidity_file)
+        print(f"  - {stack_entry.address} => OK")
+
 
     contract_trace = []
 
     # Each stack entry represents the call/return of/from a contract
     for stack_entry in stack.trace:
-        current_step_code = f"{color_normal}{'#'*80}\nEVM is running code at {stack_entry.address}. Reason: {stack_entry.reason}\n"
-        res = __get_contract_from_db(stack_entry.address, conn, local_db_path)
-
+        current_step_code = f"{color_normal}{'#'*80}\nEVM is running code at {stack_entry.address}. Reason: {stack_entry.reason}\nCalldata: {format_calldata( stack_entry.detail, stack_entry.value, function_db)}\n"
+        
+        res, ast, solidity_file = contract_db[stack_entry.address]
 
         # If no trace of the contract's source is found on the selected local cache or node, skip this stack entry
         if res is None:
             current_step_code += "Source not found in db, skipping..."
-            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(0, current_step_code, {}, [], ('',''))], {} ))
+            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(code = current_step_code)], {} ))
             continue
 
 
         code = res['code'].encode() # UTF-8 encoding
         contract_name = res['contract_name']
 
-
-        stack_entry_folder = f"{local_db_path}/{stack_entry[0]}"
-        ast = solidity_file = None
-        
-
-        # Compile contract that corresponds to current stack entry
-        ast, solidity_file = __compile_contract(stack_entry_folder, res)
-
         # Handle old solc versions that do not make use of the new ast
         if solidity_file is None or ast is None:
             current_step_code += 'AST is empty or using legacyAST, which is not supported.'
-            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(0, current_step_code, {}, [], ('',''))], {} ))
+            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(code = current_step_code)], {} ))
             continue
 
         contract = solidity_file[contract_name]
+        # metadata = json.loads(contract['metadata'])
         source_map = contract['evm']['deployedBytecode']['sourceMap']
         bytecode_object = contract['evm']['deployedBytecode']['object']
 
@@ -421,7 +459,7 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
 
         except Exception as e:
             current_step_code += f'{color_error}Error: Could not decompress source map. Encountered exception: {e}{color_normal}'
-            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(0, current_step_code, {}, [], ('',''))], {} ))
+            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(code = current_step_code)], {} ))
             continue
 
         
@@ -454,14 +492,23 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
 
         line_index, char_index = __create_source_index(code)
         
+        node_groups = __group_instructions(instruction_node_list, storage_layout)
+
         # Highlight executed code
         step_counter = 0
         step_trace = []
-        
-        for idx, (scope_node, node_set, block_trace, storage_data, marking) in enumerate(__group_instructions(instruction_node_list, storage_layout)):
+        prev_storage_data = {}
+
+        for idx, (scope_node, node_set, block_trace, storage_data, marking) in enumerate(node_groups):
             
             #TODO Add debug argument check
             current_step_code += f"DEBUG GROUP INDEX: {idx}\n"
+            annotations = ''
+            
+            # Add state access annotation
+            if prev_storage_data != storage_data:
+                annotations += f'{color_note}State access detected{color_normal}\n'
+                prev_storage_data = storage_data
 
             scope = scope_node['src']
             scope_f, scope_r, _ = map(int, scope.split(':'))
@@ -503,7 +550,7 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
             # Unless there was nothing to highlight, wrap all the data in a single step for the contract trace display
             if node_types:
                 current_step_code += f"step {step_counter}:\nline: {line_index[scope_f] + 1} : {source_display.decode()}{color_normal}\n"
-                step_trace.append(StepWrapper(scope_node['id'], current_step_code, storage_data, node_types, marking))
+                step_trace.append(StepWrapper(scope_node['id'], current_step_code, storage_data, node_types, block_trace, marking, annotations))
                 current_step_code = ""
                 step_counter += 1
             

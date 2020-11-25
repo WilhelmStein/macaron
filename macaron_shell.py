@@ -3,14 +3,15 @@
 import cmd, sys, copy, csv, pickle, functools, pymysql, evm_stack
 from trace_transaction import calculate_trace_display
 from expression_parser import parse_expression, StateCode
+from macaron_utils import *
 from web3 import Web3
+# from calldata_extractor import TraceParser
+# from web3_connections import get_trace
 
 # import cProfile, pstats, io
 
 class MacaronShell(cmd.Cmd):
 
-    color_normal = '\033[31m\033[40m'
-    color_reset = '\033[m'
     clear = '\033c\033'
 
     intro = f'{color_normal}Macaron Navigator Prototype'
@@ -279,7 +280,7 @@ class MacaronShell(cmd.Cmd):
     # Misc commands
     def do_quit(self, arg):
         '''Terminate the program.'''
-        print(self.color_reset) # Reset terminal colors
+        print(color_reset) # Reset terminal colors
         exit(0)
 
 
@@ -321,6 +322,8 @@ class MacaronShell(cmd.Cmd):
 
     def reload_transaction(self):
         if self.current_transaction:
+            # self.trace_parser = TraceParser(self.current_transaction)
+            # self.trace_parser.parse_trace(get_trace()['result']['structLogs'])
             self.contract_trace = self.prepare_transaction(self.current_transaction)
             self.refresh = True
         else:
@@ -331,7 +334,7 @@ class MacaronShell(cmd.Cmd):
         if self.contract_trace:
             self.print_current_step()
         else:
-            print(f'{self.clear}{self.color_normal}') # Reset Terminal
+            print(f'{self.clear}{color_normal}') # Reset Terminal
 
         print(self.help_message)
     
@@ -339,7 +342,7 @@ class MacaronShell(cmd.Cmd):
     def postcmd(self, stop, line):
         if self.refresh:
             self.refresh = False
-            print(f'{self.clear}{self.color_normal}') # Reset Terminal
+            print(f'{self.clear}{color_normal}') # Reset Terminal
             self.print_current_step()
             print(self.help_message)
 
@@ -485,11 +488,25 @@ class MacaronShell(cmd.Cmd):
         
     def get_current_step(self):
         return self.contract_trace[self.contract_index].steps[self.step_index]
+
+
+    def get_prev_step(self):
+        prev_step_index = self.step_index - 1
+        prev_step_contract_index = self.contract_index
+
+        if prev_step_index < 0:
+            if self.contract_index - 1 < 0:
+                return None
+            prev_step_contract_index = self.contract_index - 1
+            prev_step_index = len(self.contract_trace[prev_step_contract_index].steps) - 1
+        
+        return self.contract_trace[prev_step_contract_index].steps[prev_step_index]
     
 
     def print_current_step(self):
         current_step = self.get_current_step()
-        print(f'{current_step.code}\n{current_step.persistant_data}\n{current_step.debug_info}\n{current_step.marking} : {current_step.function_id}')
+
+        print(f'{current_step.annotations}{current_step.code}\n{current_step.persistant_data}\n{current_step.debug_info}\n{current_step.marking} : {current_step.function_id}\nBlock Trace: {current_step.block_trace}')
         
 
 if __name__ == '__main__':
@@ -528,7 +545,11 @@ if __name__ == '__main__':
 
         # transaction = '0x7f444e65cc26c4eae2b0fe66b7cbe9f5b83b8befa23dc7f46f9d22d516d20129' # Send ticket
 
-        # transaction = '0xe52c4aedb8f15aacd8d8e7c074c0736bbf4ebcd0fc08e87dc43f8946cbb5da30' # Clean storage write 
+        # transaction = '0xe52c4aedb8f15aacd8d8e7c074c0736bbf4ebcd0fc08e87dc43f8946cbb5da30' # Clean storage write
+        # transaction = '0x591b7c81bdfd0fdb2d73414df1e5376d2145426210bbc50f95812e790488d0c0' # Fib rec call
+        # transaction = '0xf222aa6dfef05f2c7804a7330fa8fb17dfacdb988b7cdf973c01eed96760720a' # Fib iter call
+        # transaction = '0x6b21aab5da28737ff8a645e7dabfb4c7ac19eb0b4668b1f5169ec4a7a3bb3d6b' # PrimesUntil 30
+        # transaction = '0x2077d345b232480899b6dc9543c44b62f101bbe5fa8716438a1e34c22a1c51d5' # PrimesUntilWhile 30
 
 
         # pr = cProfile.Profile()
@@ -549,7 +570,7 @@ if __name__ == '__main__':
         import pdb
         import traceback
 
-        print(MacaronShell.color_reset) # Reset terminal colors
+        print(color_reset) # Reset terminal colors
         extype, value, tb = sys.exc_info()
         traceback.print_exc()
 
