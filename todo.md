@@ -12,8 +12,8 @@
     - [x] Bytes and String
     - [x] Identifiers 
   - [ ] Display storage changes between steps
-  - [ ] Call data Visualization
-  - [ ] Higher Level View (Function call level)
+  - [x] Call data Visualization
+  - [x] Higher Level View (Call level)
 
 - [ ] Implement Navigation
   - [x]  Group mappings into steps
@@ -24,12 +24,10 @@
 
 - [ ] Polishing
   - [x] Easier deployment
-  - [x] Aliasing system  
-  - [ ] Scroll functionality
+  - [x] Aliasing system
   - [x] Better display of storage contents
   - [x] Fix bytecode to source mismappings
     - [x] Handle inline assembly
   - [x] Caching 
   - [ ] Loop Detection
-  - [x] Revamp part 1
-  - [ ] Revamp part 2
+  - [x] Revamp

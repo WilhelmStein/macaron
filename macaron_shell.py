@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import cmd, sys, copy, csv, pickle, functools, pymysql, evm_stack
+import argparse, cmd, sys, copy, csv, pickle, functools, pymysql, evm_stack
 from trace_transaction import calculate_trace_display
 from expression_parser import parse_expression, StateCode
 from macaron_utils import *
@@ -22,11 +22,12 @@ class MacaronShell(cmd.Cmd):
 
     refresh = False
 
-    def __init__(self, transaction_address = None, database_connection = None, rpc_endpoint = 'http://localhost:8545'): #TODO Add instant alias loading
+    def __init__(self, transaction_address = None, database_connection = None, rpc_endpoint = 'http://localhost:8545', contract_cache = './local_contract_db'): #TODO Add instant alias loading
         cmd.Cmd.__init__(self)
 
         self.rpc_endpoint = rpc_endpoint
         self.database_connection = database_connection
+        self.contract_cache = contract_cache
         self.current_transaction = transaction_address
         self.contract_trace = []
         self.aliases = {
@@ -46,6 +47,7 @@ class MacaronShell(cmd.Cmd):
 
 
     # Connection Commands
+    #TODO Add authentication
     def do_set_rpc_endpoint(self, arg):
         try:
             self.rpc_endpoint, self.endpoint_secret = arg.split(':')
@@ -316,7 +318,7 @@ class MacaronShell(cmd.Cmd):
         stack.import_transaction(transaction_address, self.rpc_endpoint)
         self.contract_index = self.step_index = 0
         self.high_level_view = True
-        return calculate_trace_display(stack, self.database_connection)
+        return calculate_trace_display(stack, self.database_connection, self.contract_cache)
 
 
     def load_pickle(self, filename, open_method):
@@ -541,50 +543,59 @@ class MacaronShell(cmd.Cmd):
 if __name__ == '__main__':
     try:
 
-        # if len(sys.argv) != 2:
-        #     raise Exception('Usage: python3 macaron_shell.py TRANSACTION')
-
-
-        conn = pymysql.connect(
-            host="127.0.0.1",
-            port=int(3307),
-            user="tracer",
-            passwd="a=$G5)Z]vqY6]}w{",
-            db="gigahorse",
-            read_timeout=int(3),
-            charset='utf8mb4')
+        parser = argparse.ArgumentParser(description='A transaction trace navigation tool for solidity contracts on the ethereum blockchain.')
+        parser.add_argument('--tx', dest = 'transaction_hash', metavar='TX', type=str, nargs=1, help='the hash of the transaction to be explored')
+        parser.add_argument('--db', dest = 'contract_db', metavar='DB', type=str, nargs='?', default=None, help='the contract database that contains the contract code')
+        parser.add_argument('--cache', dest = 'contract_cache', metavar='C', type=str, nargs='?', default='./local_contract_db', help='the contract cache location that will be used')
+        parser.add_argument('--node', dest = 'ethereum_node', metavar='N', type=str, nargs='?', default='http://localhost:8545', help='the blockchain node which will serve the transaction trace')
+        args = parser.parse_args()
         
 
-       # Mainnet Tests
-        # transaction = '0xa67c14e87755014e75f843aef3db09a5a2d8e54f746e6938b77ea1ccae1ccf2c' # Scheme Registrar v0.5.13
+        if not args.transaction_hash:
+            # Mainnet Tests
+            # transaction = '0xa67c14e87755014e75f843aef3db09a5a2d8e54f746e6938b77ea1ccae1ccf2c' # Scheme Registrar v0.5.13
 
-        # transaction = '0x4bbea23a4cca98a5231854c48b4f31d71f7b437c681299d23957ebe63542f3fe' # RenBTC v0.5.16
-        # transaction = '0x4ae860eb77a12e3f9a0b0bd83228d066f4249607b5840aa30ca324c77c3073ca' # KyberNetworkProxy v0.6.6 #TODO NOT WORKING CORRECTLY
-        transaction = '0x0f386cd63450bbcbe0d4a4da1354b96c7f1b4f1c6f8b2dcc12971c20aef26194' # KyberStorage v0.6.6
-        # transaction = '0x99d3197f0149bf1dcfebec320f67704358564a768f2fa479342e954e7ec21dfa' # Kyber: Matching Engine v0.6.6
-        # transaction = '0x080a77fa25c18a2cf11e305eddcca06bd47f70d0b3d683e370647aacb9ab8e54' # Bancor Finder v0.5.17 #TODO CREATION
-        # transaction = '0xcf0cc27bb2c9f160c2ac90d419c7c741c58ba4f6e2c4d3546f02b72723985ca8' # Loihi v0.5.15 #TODO Index out of range when stepping
-        # transaction = '0x3c5ae6d88316d96bc5b3632aa37dcc7bd1ffcc3217a3b83b36448f1b0f30c67c' # InitializableAdminUpgreadabilityProxy v0.5.14
+            # transaction = '0x4bbea23a4cca98a5231854c48b4f31d71f7b437c681299d23957ebe63542f3fe' # RenBTC v0.5.16
+            # transaction = '0x4ae860eb77a12e3f9a0b0bd83228d066f4249607b5840aa30ca324c77c3073ca' # KyberNetworkProxy v0.6.6 #TODO NOT WORKING CORRECTLY
+            transaction = '0x0f386cd63450bbcbe0d4a4da1354b96c7f1b4f1c6f8b2dcc12971c20aef26194' # KyberStorage v0.6.6
+            # transaction = '0x99d3197f0149bf1dcfebec320f67704358564a768f2fa479342e954e7ec21dfa' # Kyber: Matching Engine v0.6.6
+            # transaction = '0x080a77fa25c18a2cf11e305eddcca06bd47f70d0b3d683e370647aacb9ab8e54' # Bancor Finder v0.5.17 #TODO CREATION
+            # transaction = '0xcf0cc27bb2c9f160c2ac90d419c7c741c58ba4f6e2c4d3546f02b72723985ca8' # Loihi v0.5.15 #TODO Index out of range when stepping
+            # transaction = '0x3c5ae6d88316d96bc5b3632aa37dcc7bd1ffcc3217a3b83b36448f1b0f30c67c' # InitializableAdminUpgreadabilityProxy v0.5.14
 
-        # Debug Tests
-        # transaction = '0x247357d9bdac0ddb6fd26641090aad59595c6cd6ec2e89fae16fc3cbdafeb2cb' # Storage Write
-        # transaction = '' # Storage Read
-        # transaction = '0x58b51b4918fbc9f31f026c9eb1494b96af8ad024bfb3603d5aa8a47efb745929' # Rename Slot
-        # transaction = '0x02c9962e1f1f7509704d245af56df099e8a8ff458e94a60320ac9bac141d470f' # Rename Slot with more than 31 bytes
+            # Debug Tests
+            # transaction = '0x247357d9bdac0ddb6fd26641090aad59595c6cd6ec2e89fae16fc3cbdafeb2cb' # Storage Write
+            # transaction = '' # Storage Read
+            # transaction = '0x58b51b4918fbc9f31f026c9eb1494b96af8ad024bfb3603d5aa8a47efb745929' # Rename Slot
+            # transaction = '0x02c9962e1f1f7509704d245af56df099e8a8ff458e94a60320ac9bac141d470f' # Rename Slot with more than 31 bytes
 
-        # transaction = '0x7f444e65cc26c4eae2b0fe66b7cbe9f5b83b8befa23dc7f46f9d22d516d20129' # Send ticket
+            # transaction = '0x7f444e65cc26c4eae2b0fe66b7cbe9f5b83b8befa23dc7f46f9d22d516d20129' # Send ticket
 
-        # transaction = '0xe52c4aedb8f15aacd8d8e7c074c0736bbf4ebcd0fc08e87dc43f8946cbb5da30' # Clean storage write
-        # transaction = '0x591b7c81bdfd0fdb2d73414df1e5376d2145426210bbc50f95812e790488d0c0' # Fib rec call
-        # transaction = '0xf222aa6dfef05f2c7804a7330fa8fb17dfacdb988b7cdf973c01eed96760720a' # Fib iter call
-        # transaction = '0x6b21aab5da28737ff8a645e7dabfb4c7ac19eb0b4668b1f5169ec4a7a3bb3d6b' # PrimesUntil 30
-        # transaction = '0x2077d345b232480899b6dc9543c44b62f101bbe5fa8716438a1e34c22a1c51d5' # PrimesUntilWhile 30
+            # transaction = '0xe52c4aedb8f15aacd8d8e7c074c0736bbf4ebcd0fc08e87dc43f8946cbb5da30' # Clean storage write
+            # transaction = '0x591b7c81bdfd0fdb2d73414df1e5376d2145426210bbc50f95812e790488d0c0' # Fib rec call
+            # transaction = '0xf222aa6dfef05f2c7804a7330fa8fb17dfacdb988b7cdf973c01eed96760720a' # Fib iter call
+            # transaction = '0x6b21aab5da28737ff8a645e7dabfb4c7ac19eb0b4668b1f5169ec4a7a3bb3d6b' # PrimesUntil 30
+            # transaction = '0x2077d345b232480899b6dc9543c44b62f101bbe5fa8716438a1e34c22a1c51d5' # PrimesUntilWhile 30
+        else:
+            transaction = args.transaction_hash[0]
+
+        if args.contract_db:
+            conn = pymysql.connect(
+                host="127.0.0.1",
+                port=int(3307),
+                user="tracer",
+                passwd="a=$G5)Z]vqY6]}w{",
+                db="gigahorse",
+                read_timeout=int(3),
+                charset='utf8mb4')
+        else:
+            conn = None
 
 
         # pr = cProfile.Profile()
 
         # pr.enable()
-        navigator = MacaronShell(transaction, conn)
+        navigator = MacaronShell(transaction, conn, args.ethereum_node, args.contract_cache)
         # pr.disable()
 
         # s = io.StringIO()
