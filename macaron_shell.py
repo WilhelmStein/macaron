@@ -37,6 +37,7 @@ class MacaronShell(cmd.Cmd):
             'pf' : self.do_prev_func_call,
             'nc' : self.do_next_contract,
             'pc' : self.do_prev_contract,
+            'v' : self.do_change_view,
             'q' : self.do_quit,
             'r' : self.do_refresh
         }
@@ -168,6 +169,11 @@ class MacaronShell(cmd.Cmd):
             self.step_index = 0
             self.refresh = True
     
+
+    def do_change_view(self, arg):
+        self.high_level_view  = not self.high_level_view
+        self.refresh = True
+
 
     def do_print(self, arg):
         '''Print the contents of a variable in scope'''
@@ -309,6 +315,7 @@ class MacaronShell(cmd.Cmd):
         stack = evm_stack.EVMExecuctionStack()
         stack.import_transaction(transaction_address, self.rpc_endpoint)
         self.contract_index = self.step_index = 0
+        self.high_level_view = True
         return calculate_trace_display(stack, self.database_connection)
 
 
@@ -332,7 +339,10 @@ class MacaronShell(cmd.Cmd):
 
     def preloop(self):
         if self.contract_trace:
-            self.print_current_step()
+            if self.high_level_view:
+                self.print_high_level()
+            else:
+                self.print_current_step()
         else:
             print(f'{self.clear}{color_normal}') # Reset Terminal
 
@@ -343,7 +353,12 @@ class MacaronShell(cmd.Cmd):
         if self.refresh:
             self.refresh = False
             print(f'{self.clear}{color_normal}') # Reset Terminal
-            self.print_current_step()
+
+            if self.high_level_view:
+                self.print_high_level()
+            else:
+                self.print_current_step()
+
             print(self.help_message)
 
     
@@ -509,6 +524,20 @@ class MacaronShell(cmd.Cmd):
         print(f'{current_step.annotations}{current_step.code}\n{current_step.persistant_data}\n{current_step.debug_info}\n{current_step.marking} : {current_step.function_id}\nBlock Trace: {current_step.block_trace}')
         
 
+    def print_high_level(self):
+        str_buff = ''
+        print(color_normal)
+        for contract in self.contract_trace:
+
+            if contract.reason in evm_stack.calls:
+                str_buff += '  '
+
+            print(f"{str_buff}{contract.reason} address {contract.address} : {contract.calldata}\n")
+
+            if contract.reason not in evm_stack.calls:
+                str_buff = str_buff[:-2]
+
+
 if __name__ == '__main__':
     try:
 
@@ -527,11 +556,11 @@ if __name__ == '__main__':
         
 
        # Mainnet Tests
-        transaction = '0xa67c14e87755014e75f843aef3db09a5a2d8e54f746e6938b77ea1ccae1ccf2c' # Scheme Registrar v0.5.13
+        # transaction = '0xa67c14e87755014e75f843aef3db09a5a2d8e54f746e6938b77ea1ccae1ccf2c' # Scheme Registrar v0.5.13
 
         # transaction = '0x4bbea23a4cca98a5231854c48b4f31d71f7b437c681299d23957ebe63542f3fe' # RenBTC v0.5.16
         # transaction = '0x4ae860eb77a12e3f9a0b0bd83228d066f4249607b5840aa30ca324c77c3073ca' # KyberNetworkProxy v0.6.6 #TODO NOT WORKING CORRECTLY
-        # transaction = '0x0f386cd63450bbcbe0d4a4da1354b96c7f1b4f1c6f8b2dcc12971c20aef26194' # KyberStorage v0.6.6
+        transaction = '0x0f386cd63450bbcbe0d4a4da1354b96c7f1b4f1c6f8b2dcc12971c20aef26194' # KyberStorage v0.6.6
         # transaction = '0x99d3197f0149bf1dcfebec320f67704358564a768f2fa479342e954e7ec21dfa' # Kyber: Matching Engine v0.6.6
         # transaction = '0x080a77fa25c18a2cf11e305eddcca06bd47f70d0b3d683e370647aacb9ab8e54' # Bancor Finder v0.5.17 #TODO CREATION
         # transaction = '0xcf0cc27bb2c9f160c2ac90d419c7c741c58ba4f6e2c4d3546f02b72723985ca8' # Loihi v0.5.15 #TODO Index out of range when stepping

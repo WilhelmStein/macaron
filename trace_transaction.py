@@ -332,7 +332,7 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
         marking: 'typing.Any' = ('', '')
         annotations: str = ''
 
-    ContractWrapper = namedtuple('ContractWrapper', ['address', 'reason', 'steps', 'storage_layout'])
+    ContractWrapper = namedtuple('ContractWrapper', ['address', 'reason', 'steps', 'storage_layout', 'calldata'])
 
     PcData = namedtuple('PcData', ['opcode', 'source_mapping', 'ast_node_mapping'])
     # ContractData = namedtuple('ContractData', ['address', 'ast', 'solidity_file', 'storage_layout'])
@@ -345,6 +345,8 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
 
     print("Compiling contracts:")
     for stack_entry in stack.trace:
+        if stack_entry.address in contract_db:
+            continue
 
         res = __get_contract_from_db(stack_entry.address, conn, local_db_path)
         if res is None:
@@ -356,7 +358,7 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
 
         # Populate function db
         for contract in solidity_file.values():
-            if 'metadata' not in contract:
+            if 'metadata' not in contract or contract['metadata'] == '':
                 continue
 
             metadata = json.loads(contract['metadata'])
@@ -381,14 +383,15 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
 
     # Each stack entry represents the call/return of/from a contract
     for stack_entry in stack.trace:
-        current_step_code = f"{color_normal}{'#'*80}\nEVM is running code at {stack_entry.address}. Reason: {stack_entry.reason}\nCalldata: {format_calldata( stack_entry.detail, stack_entry.value, function_db)}\n"
+        calldata = format_calldata( stack_entry.detail, stack_entry.value, function_db)
+        current_step_code = f"{color_normal}{'#'*80}\nEVM is running code at {stack_entry.address}. Reason: {stack_entry.reason}\nCalldata: {calldata}\n"
         
         res, ast, solidity_file = contract_db[stack_entry.address]
 
         # If no trace of the contract's source is found on the selected local cache or node, skip this stack entry
         if res is None:
             current_step_code += "Source not found in db, skipping..."
-            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(code = current_step_code)], {} ))
+            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason, [StepWrapper(code = current_step_code)], {}, calldata ))
             continue
 
 
@@ -398,7 +401,7 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
         # Handle old solc versions that do not make use of the new ast
         if solidity_file is None or ast is None:
             current_step_code += 'AST is empty or using legacyAST, which is not supported.'
-            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(code = current_step_code)], {} ))
+            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason, [StepWrapper(code = current_step_code)], {}, calldata ))
             continue
 
         contract = solidity_file[contract_name]
@@ -459,7 +462,7 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
 
         except Exception as e:
             current_step_code += f'{color_error}Error: Could not decompress source map. Encountered exception: {e}{color_normal}'
-            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason.split(' '), [StepWrapper(code = current_step_code)], {} ))
+            contract_trace.append(ContractWrapper(stack_entry.address, stack_entry.reason, [StepWrapper(code = current_step_code)], {}, calldata ))
             continue
 
         
@@ -554,6 +557,6 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
                 current_step_code = ""
                 step_counter += 1
             
-        contract_trace.append(ContractWrapper(stack_entry.address , stack_entry.reason.split(' '), step_trace, storage_layout))
+        contract_trace.append(ContractWrapper(stack_entry.address , stack_entry.reason, step_trace, storage_layout, calldata))
         
     return contract_trace
