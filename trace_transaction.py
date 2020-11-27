@@ -232,7 +232,6 @@ def __search_ast(wrapper, fro, length, source_index):
             return None
 
     # Be lax with inline assembly, since the solc isn't very verbose when it comes to it
-    # TODO Perhaps create custom nodes since the compiler won't do it for us
     if 'nodeType' in ast and ast['nodeType'] == 'InlineAssembly':
         __search_ast.last_custom_node_id += 1
         custom_node = {

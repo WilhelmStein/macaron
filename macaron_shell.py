@@ -555,9 +555,9 @@ if __name__ == '__main__':
 
         parser = argparse.ArgumentParser(description='A transaction trace navigation tool for solidity contracts on the ethereum blockchain.')
         parser.add_argument('--tx', dest = 'transaction_hash', metavar='TX', type=str, nargs=1, help='the hash of the transaction to be explored')
-        parser.add_argument('--db', dest = 'contract_db', metavar='DB', type=str, nargs='?', default=None, help='the contract database that contains the contract code')
+        parser.add_argument('--db', dest = 'contract_db_data', metavar='HOST PORT USER PASS DB_NAME', type=str, nargs=5, default=None, help='the contract database connection data')
         parser.add_argument('--cache', dest = 'contract_cache', metavar='C', type=str, nargs='?', default='./local_contract_db', help='the contract cache location that will be used')
-        parser.add_argument('--node', dest = 'ethereum_node', metavar='N', type=str, nargs='?', default='http://localhost:8545', help='the blockchain node which will serve the transaction trace')
+        parser.add_argument('--node', dest = 'ethereum_node', metavar='NODE_IP', type=str, nargs='?', default='http://localhost:8545', help='the blockchain node ip which will serve the transaction trace')
         args = parser.parse_args()
         
         #TODO This is for debugging purposes. Remove it.
@@ -577,7 +577,7 @@ if __name__ == '__main__':
             # transaction = '0x247357d9bdac0ddb6fd26641090aad59595c6cd6ec2e89fae16fc3cbdafeb2cb' # Storage Write
             # transaction = '' # Storage Read
             # transaction = '0x58b51b4918fbc9f31f026c9eb1494b96af8ad024bfb3603d5aa8a47efb745929' # Rename Slot
-            transaction = '0x02c9962e1f1f7509704d245af56df099e8a8ff458e94a60320ac9bac141d470f' # Rename Slot with more than 31 bytes
+            # transaction = '0x02c9962e1f1f7509704d245af56df099e8a8ff458e94a60320ac9bac141d470f' # Rename Slot with more than 31 bytes
 
             # transaction = '0x7f444e65cc26c4eae2b0fe66b7cbe9f5b83b8befa23dc7f46f9d22d516d20129' # Send ticket
 
@@ -589,14 +589,15 @@ if __name__ == '__main__':
         else:
             transaction = args.transaction_hash[0]
 
-
-        if args.contract_db:
+        #TODO unpack db arguments from command line
+        if args.contract_db_data:
+            h, p, u, pwd, db = args.contract_db_data
             conn = pymysql.connect(
-                host="127.0.0.1",
-                port=int(3307),
-                user="tracer",
-                passwd="a=$G5)Z]vqY6]}w{",
-                db="gigahorse",
+                host=h,
+                port=int(p),
+                user=u,
+                passwd=pwd,
+                db=db,
                 read_timeout=int(3),
                 charset='utf8mb4')
         else:
