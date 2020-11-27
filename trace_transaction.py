@@ -331,6 +331,7 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
         block_trace: list = field(default_factory=list)
         marking: 'typing.Any' = ('', '')
         annotations: str = ''
+        storage_changes: dict = field(default_factory=dict)
 
     ContractWrapper = namedtuple('ContractWrapper', ['address', 'reason', 'steps', 'storage_layout', 'calldata'])
 
@@ -501,18 +502,23 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
         step_counter = 0
         step_trace = []
         prev_storage_data = {}
+        storage_changes = {}
 
         for idx, (scope_node, node_set, block_trace, storage_data, marking) in enumerate(node_groups):
-            
+        
             #TODO Add debug argument check
             current_step_code += f"DEBUG GROUP INDEX: {idx}\n"
             annotations = ''
             
-            # Add state access annotation
+            # Add state access annotation and calculate storage changes between steps for pretty printing
             if prev_storage_data != storage_data:
                 annotations += f'{color_note}State access detected{color_normal}\n'
+                old_entry_changes = {address:(prev_storage_data[address], storage_data[address]) for address in storage_data.keys() & prev_storage_data if storage_data[address] != prev_storage_data[address]}
+                new_entries = {address:('0x0', storage_data[address]) for address in storage_data.keys() - prev_storage_data}
+                # Keep changes from previous steps which will not be shown
+                storage_changes |= old_entry_changes | new_entries
                 prev_storage_data = storage_data
-
+                
             scope = scope_node['src']
             scope_f, scope_r, _ = map(int, scope.split(':'))
             highlighted_nodes = set()
@@ -553,9 +559,10 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
             # Unless there was nothing to highlight, wrap all the data in a single step for the contract trace display
             if node_types:
                 current_step_code += f"step {step_counter}:\nline: {line_index[scope_f] + 1} : {source_display.decode()}{color_normal}\n"
-                step_trace.append(StepWrapper(scope_node['id'], current_step_code, storage_data, node_types, block_trace, marking, annotations))
+                step_trace.append(StepWrapper(scope_node['id'], current_step_code, storage_data, node_types, block_trace, marking, annotations, storage_changes))
                 current_step_code = ""
                 step_counter += 1
+                storage_changes = {}
             
         contract_trace.append(ContractWrapper(stack_entry.address , stack_entry.reason, step_trace, storage_layout, calldata))
         

@@ -523,7 +523,17 @@ class MacaronShell(cmd.Cmd):
     def print_current_step(self):
         current_step = self.get_current_step()
 
-        print(f'{current_step.annotations}{current_step.code}\n{current_step.persistant_data}\n{current_step.debug_info}\n{current_step.marking} : {current_step.function_id}\nBlock Trace: {current_step.block_trace}')
+        storage_changes_str = '\n  '.join([ f'{k}: {v[0]} => {v[1]}' for (k,v) in current_step.storage_changes.items()])
+        storage_changes_str = f'Storage changes:\n  {storage_changes_str}\n\n' if storage_changes_str != '' else ''
+
+        print(
+            f'{current_step.annotations}{current_step.code}\n'
+            f'{current_step.debug_info}\n'
+            f'{current_step.marking} : {current_step.function_id}\n\n'
+            f'{storage_changes_str}'
+            f'Block Trace: \n  {current_step.block_trace}\n\n'
+            # f'Storage Entries: {current_step.persistant_data}\n\n'
+        )
         
 
     def print_high_level(self):
@@ -550,7 +560,7 @@ if __name__ == '__main__':
         parser.add_argument('--node', dest = 'ethereum_node', metavar='N', type=str, nargs='?', default='http://localhost:8545', help='the blockchain node which will serve the transaction trace')
         args = parser.parse_args()
         
-
+        #TODO This is for debugging purposes. Remove it.
         if not args.transaction_hash:
             # Mainnet Tests
             # transaction = '0xa67c14e87755014e75f843aef3db09a5a2d8e54f746e6938b77ea1ccae1ccf2c' # Scheme Registrar v0.5.13
@@ -567,7 +577,7 @@ if __name__ == '__main__':
             # transaction = '0x247357d9bdac0ddb6fd26641090aad59595c6cd6ec2e89fae16fc3cbdafeb2cb' # Storage Write
             # transaction = '' # Storage Read
             # transaction = '0x58b51b4918fbc9f31f026c9eb1494b96af8ad024bfb3603d5aa8a47efb745929' # Rename Slot
-            # transaction = '0x02c9962e1f1f7509704d245af56df099e8a8ff458e94a60320ac9bac141d470f' # Rename Slot with more than 31 bytes
+            transaction = '0x02c9962e1f1f7509704d245af56df099e8a8ff458e94a60320ac9bac141d470f' # Rename Slot with more than 31 bytes
 
             # transaction = '0x7f444e65cc26c4eae2b0fe66b7cbe9f5b83b8befa23dc7f46f9d22d516d20129' # Send ticket
 
@@ -578,6 +588,7 @@ if __name__ == '__main__':
             # transaction = '0x2077d345b232480899b6dc9543c44b62f101bbe5fa8716438a1e34c22a1c51d5' # PrimesUntilWhile 30
         else:
             transaction = args.transaction_hash[0]
+
 
         if args.contract_db:
             conn = pymysql.connect(
