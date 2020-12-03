@@ -23,12 +23,13 @@
   - [ ] Step Over Functionality
   - [ ] Loop Detection
 
-- [ ] Polishing
+- [x] Polishing
   - [x] Easier deployment
   - [x] Aliasing system
   - [x] Better display of storage contents
   - [x] Fix bytecode to source mismappings
     - [x] Handle inline assembly
   - [x] Caching 
-  - [ ] Make state changes display variable names if possible
+  - [x] Make state changes display variable names if possible
   - [x] Revamp
+  - [x] Better UI

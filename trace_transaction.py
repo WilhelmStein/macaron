@@ -259,16 +259,16 @@ def __search_ast(wrapper, fro, length, source_index):
     return output_node
 
 
-def __group_instructions(instruction_node_list, storage_layout):
+def __group_instructions(instruction_node_list, storage_layout, starting_depth = 0):
     """Try to group bytecode instructions that correspond to the same solidity instruction"""
     
     output_list = []
     grouped_nodes = {}
     block_trace = []
     scope_node = None
-    marking = ''
+    depth = starting_depth
     
-    for instruction_node_idx, (pc, opcode, data, node_wrapper) in enumerate(instruction_node_list):
+    for idx, (pc, opcode, data, node_wrapper) in enumerate(instruction_node_list):
         # TODO Optimize
 
         # Ascertain current node's scope (if applicable) by taking a look at its lineage
@@ -277,7 +277,7 @@ def __group_instructions(instruction_node_list, storage_layout):
         if opcode != opcodes['JUMPDEST']:
 
             if node['nodeType'] == 'ContractDefinition':
-                scope_node = node # TODO Remove this
+                scope_node = node
             elif node['nodeType'] in {'ModifierDefinition', 'FunctionDefinition'}:
                 scope_node = node
             else:
@@ -287,23 +287,19 @@ def __group_instructions(instruction_node_list, storage_layout):
                         break
         
                     
-        # Ignore nodes with invalid scopes and greate groups between JUMP instructions
-        if not scope_node:
-            continue
-        elif opcode == opcodes['JUMPI'] or opcode == opcodes['JUMP']: #TODO Check modifiers being ignored, possible culprit is how they are implemented by solidity
+        # Create groups between JUMP instructions
+        if opcode == opcodes['JUMPI'] or opcode == opcodes['JUMP']: #TODO Check modifiers being ignored, possible culprit is how they are implemented by solidity
             pass
         elif opcode == opcodes['JUMPDEST']:
             # Do not group JUMPDEST instructions, as they only confuse the display process and their display is unnecessary
-            # JUMPDEST instructions should only be used to denote function entry-exit and loop entry-exit
             if node['nodeType'] == 'FunctionDefinition':
-                marking = 'FUNCTION_ENTRY'
+                depth += 1
             elif node['nodeType'] == 'FunctionCall':
-                marking = 'FUNCTION_EXIT'
+                depth -= 1
             else:
                 pass
 
-            output_list.append((scope_node, grouped_nodes, block_trace, data.storage, marking))
-            marking = ''
+            output_list.append((scope_node, grouped_nodes, block_trace, data.storage, depth))
             grouped_nodes = {}
             block_trace = []
             
@@ -313,9 +309,40 @@ def __group_instructions(instruction_node_list, storage_layout):
         block_trace.append( (pc, opcode) )
 
     if grouped_nodes:
-        output_list.append((scope_node, grouped_nodes, block_trace, data.storage, marking))
+        output_list.append((scope_node, grouped_nodes, block_trace, data.storage, depth))
 
-    return output_list
+    return (output_list, depth)
+
+
+def compute_var_addr(var, storage_layout):
+    addr_to_var = {}
+    var_to_starting_addr = {var['astId']:0}
+    frontier = [var]    
+    
+    for v in frontier:
+        starting_addr = var_to_starting_addr[v['astId']]
+        v_type_data = storage_layout['types'][var['type']]
+        if 'members' in v_type_data:
+            for m in v_type_data['members']:
+                if not m['astId'] in var_to_starting_addr:
+                    var_to_starting_addr[m['astId']] = starting_addr + int(v['slot'])
+                    frontier.append(m)
+        
+        # encoding = v_type_data['encoding']; nBytes = v_type_data['numberOfBytes']
+
+        
+        # if encoding == 'inplace':
+        addr_to_var[int_to_hex_addr(starting_addr + int(v['slot']))] = v
+        # elif encoding == 'mapping':
+        #     pass
+        # elif encoding == 'dynamic_array':
+        #     addr_to_var
+        # elif encoding == 'bytes':
+        #     pass
+        # else:
+        #     raise Exception('Error: Unknown variable encoding encountered during the mapping of variable names to storage addresses.')
+
+    return addr_to_var
 
 
 def calculate_trace_display(stack, conn = None, local_db_path = './local_contract_db'):
@@ -326,9 +353,9 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
         function_id: int = 0
         code: str = ''
         persistant_data: dict = field(default_factory=dict)
-        debug_info: list = field(default_factory=list)
+        solidity_ast_nodes: list = field(default_factory=list)
         block_trace: list = field(default_factory=list)
-        marking: 'typing.Any' = ('', '')
+        depth: int = 0
         annotations: str = ''
         storage_changes: dict = field(default_factory=dict)
 
@@ -350,17 +377,35 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
 
         res = __get_contract_from_db(stack_entry.address, conn, local_db_path)
         if res is None:
-            contract_db[stack_entry.address] = (None, None, None)
+            contract_db[stack_entry.address] = (None, None, None, None)
             print(f"  - {stack_entry.address} => Could not find source in db")
             continue
         
         ast, solidity_file = __compile_contract(f"{local_db_path}/{stack_entry.address}", res)
 
-        # Populate function db
-        for contract in solidity_file.values():
+        if solidity_file is None or ast is None:
+            contract_db[stack_entry.address] = (res, None, None, None)
+            print(f"  - {stack_entry.address} => Compilation error/incompatible ast")
+            continue
+
+        contract_to_storage = {}
+        for contract_key, contract in solidity_file.items():
+            
+            # Populate storage_address => var_name dictionary
+            addr_to_var = {}
+            if 'storageLayout' in contract:
+                storage_layout = contract['storageLayout']
+                
+                for var in storage_layout['storage']:
+                    addr_to_var |= compute_var_addr(var, storage_layout)
+            
+            contract_to_storage[contract_key] = addr_to_var
+
+
+            # Populate function db
             if 'metadata' not in contract or contract['metadata'] == '':
                 continue
-
+            
             metadata = json.loads(contract['metadata'])
             for entry in metadata['output']['abi']:
                 if entry['type'] == 'function':
@@ -369,24 +414,21 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
                         'signature': function_sig,
                         'param_names': list(map(lambda i: i['name'], entry['inputs']))
                     }
-
-        if solidity_file is None or ast is None:
-            contract_db[stack_entry.address] = (res, None, None)
-            print(f"  - {stack_entry.address} => Compilation error/incompatible ast")
-            continue
         
-        contract_db[stack_entry.address] = (res, ast, solidity_file)
+        contract_db[stack_entry.address] = (res, ast, solidity_file, contract_to_storage)
         print(f"  - {stack_entry.address} => OK")
 
 
     contract_trace = []
+    contract_last_storage = defaultdict(dict)
 
     # Each stack entry represents the call/return of/from a contract
+    current_depth = 0
     for stack_entry in stack.trace:
         calldata = format_calldata( stack_entry.detail, stack_entry.value, function_db)
-        current_step_code = f"{color_normal}{'#'*80}\nEVM is running code at {stack_entry.address}. Reason: {stack_entry.reason}\nCalldata: {calldata}\n"
+        current_step_code = f"{color_normal}{'#'*80}\nEVM is running code at {stack_entry.address}. Reason: {stack_entry.reason}\nCalldata: {color_calldata}{calldata}{color_normal}\n"
         
-        res, ast, solidity_file = contract_db[stack_entry.address]
+        res, ast, solidity_file, contract_to_storage = contract_db[stack_entry.address]
 
         # If no trace of the contract's source is found on the selected local cache or node, skip this stack entry
         if res is None:
@@ -408,6 +450,7 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
         # metadata = json.loads(contract['metadata'])
         source_map = contract['evm']['deployedBytecode']['sourceMap']
         bytecode_object = contract['evm']['deployedBytecode']['object']
+        addr_to_var = contract_to_storage[contract_name]
 
 
         # Bytecode divergence check
@@ -495,25 +538,29 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
 
         line_index, char_index = __create_source_index(code)
         
-        node_groups = __group_instructions(instruction_node_list, storage_layout)
+        node_groups, current_depth = __group_instructions(instruction_node_list, storage_layout, current_depth)
 
         # Highlight executed code
         step_counter = 0
         step_trace = []
-        prev_storage_data = {}
+        prev_storage_data = contract_last_storage[stack_entry.address]
         storage_changes = {}
 
-        for idx, (scope_node, node_set, block_trace, storage_data, marking) in enumerate(node_groups):
+        for idx, (scope_node, node_set, block_trace, storage_data, depth) in enumerate(node_groups):
         
             #TODO Add debug argument check
+            
             current_step_code += f"DEBUG GROUP INDEX: {idx}\n"
             annotations = ''
             
+            # Take into account data from previous calls
+            storage_data = prev_storage_data | storage_data
+
             # Add state access annotation and calculate storage changes between steps for pretty printing
             if prev_storage_data != storage_data:
                 annotations += f'{color_note}State access detected{color_normal}\n'
                 old_entry_changes = {address:(prev_storage_data[address], storage_data[address]) for address in storage_data.keys() & prev_storage_data if storage_data[address] != prev_storage_data[address]}
-                new_entries = {address:('0x0', storage_data[address]) for address in storage_data.keys() - prev_storage_data}
+                new_entries = {address:('Uninitialized/Unknown', storage_data[address]) for address in storage_data.keys() - prev_storage_data}
                 # Keep changes from previous steps which will not be shown
                 storage_changes |= old_entry_changes | new_entries
                 prev_storage_data = storage_data
@@ -558,11 +605,22 @@ def calculate_trace_display(stack, conn = None, local_db_path = './local_contrac
             # Unless there was nothing to highlight, wrap all the data in a single step for the contract trace display
             if node_types:
                 current_step_code += f"step {step_counter}:\nline: {line_index[scope_f] + 1} : {source_display.decode()}{color_normal}\n"
-                step_trace.append(StepWrapper(scope_node['id'], current_step_code, storage_data, node_types, block_trace, marking, annotations, storage_changes))
+
+                # Try to match storage addresses to variable names
+                updated_storage_changes = {}
+                for (k,v) in storage_changes.items():
+                    if k in addr_to_var:
+                        k_type = addr_to_var[k]['type']; k_label = addr_to_var[k]['label']
+                        updated_storage_changes[f'{k}: ({k_type}) {k_label}'] = v
+                    else:
+                        updated_storage_changes[k] = v
+
+                step_trace.append(StepWrapper(scope_node['id'], current_step_code, storage_data, node_types, block_trace, depth, annotations, updated_storage_changes))
                 current_step_code = ""
                 step_counter += 1
                 storage_changes = {}
             
         contract_trace.append(ContractWrapper(stack_entry.address , stack_entry.reason, step_trace, storage_layout, calldata))
+        contract_last_storage[stack_entry.address] = storage_data
         
     return contract_trace

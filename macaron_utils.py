@@ -1,6 +1,7 @@
 import time
 from datetime import datetime
 import config
+from web3 import Web3
 
 known_addresses = {}
 
@@ -34,13 +35,24 @@ node_children_names = { 'arguments', 'baseExpression', 'body', 'components', 'co
 
 # Printing Defs
 LINE_SPLIT_DELIMETER = '\n'
+LINE_LIMIT = 36
 
-color_normal = '\033[31m\033[40m'       # RED on BLACK
-color_highlight = '\033[30m\033[107m'   # BLACK on BRIGHT WHITE
+# color_normal = '\033[31m\033[40m'       # RED on BLACK
+color_normal = '\033[0m\033[97m'               # WHITE
+
+# color_highlight = '\033[30m\033[107m'   # BLACK on BRIGHT WHITE
+color_highlight = '\033[30m\033[103m'   # BLACK on BRIGHT YELLOW
+
+color_calldata = '\033[30m\033[105m'    # BLACK on BRIGHT MAGENTA
 color_warning = '\033[30m\033[106m'     # BLACK on BRIGHT CYAN
-color_note = '\033[30m\033[102m'        # BLACK on BRIGHT GREEN 
+color_note = '\033[30m\033[102m'        # BLACK on BRIGHT GREEN
 color_error = '\033[30m\033[101m'       # BLACK on BRIGHT RED
 color_reset = '\033[m'                  # RESET
+
+
+def int_to_hex_addr(address):
+    address = Web3.toHex(address)[2:]
+    return address.zfill(65 - len(address))
 
 
 def strip_cbor(bytecode):

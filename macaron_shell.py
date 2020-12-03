@@ -4,6 +4,8 @@ import argparse, cmd, sys, copy, csv, pickle, functools, pymysql, evm_stack
 from trace_transaction import calculate_trace_display
 from expression_parser import parse_expression, StateCode
 from macaron_utils import *
+from tabulate import tabulate
+from math import ceil
 from web3 import Web3
 # from calldata_extractor import TraceParser
 # from web3_connections import get_trace
@@ -18,7 +20,7 @@ class MacaronShell(cmd.Cmd):
     prompt = '>:'
     step_index = contract_index = 0
     contract_trace = []
-    help_message = 'Navigation: (n)ext step - (p)revious step - next function call (nf) - previous function call (pf) - next contract (nc) - previous contract (pc) - help'
+    help_message = 'Navigation: (n)ext step - (p)revious step - change (v)iew - next function call (nf) - previous function call (pf) - next contract (nc) - previous contract (pc) - help'
 
     refresh = False
 
@@ -30,17 +32,20 @@ class MacaronShell(cmd.Cmd):
         self.contract_cache = contract_cache
         self.current_transaction = transaction_address
         self.contract_trace = []
+        self.block_trace_activated = False
         self.aliases = {
             'n' : self.do_next,
             'p' : self.do_prev,
-            'so': self.do_step_out,
+            's': self.do_step_over,
+            'su': self.do_step_up,
             'nf' : self.do_next_func_call,
             'pf' : self.do_prev_func_call,
             'nc' : self.do_next_contract,
             'pc' : self.do_prev_contract,
             'v' : self.do_change_view,
             'q' : self.do_quit,
-            'r' : self.do_refresh
+            'r' : self.do_refresh,
+            'bt': self.do_blocktrace
         }
 
         self.reload_transaction()
@@ -84,7 +89,7 @@ class MacaronShell(cmd.Cmd):
             self.refresh = True
 
         
-    def do_step_out(self, arg):
+    def do_step_up(self, arg):
         '''Step out of the function currently in'''
         current_id = self.contract_trace[self.contract_index].steps[self.step_index].function_id
         function_id = None
@@ -135,12 +140,29 @@ class MacaronShell(cmd.Cmd):
             current_step_index = 0
 
 
+    def do_step_over(self, arg):
+        '''Step over (instead of into) a function call'''
+        current_depth = self.contract_trace[self.contract_index].steps[self.step_index].depth
+
+        current_step_index = self.step_index + 1
+        for i in range(self.contract_index, len(self.contract_trace)):
+            for j in range(current_step_index, len(self.contract_trace[i].steps)):
+                if self.contract_trace[i].steps[j].depth == current_depth:
+                    self.contract_index = i
+                    self.step_index = j
+                    self.refresh = True
+                    return
+            
+            current_step_index = 0
+        
+        print('Reached the end of the trace.')
+
 
     def do_next_func_call(self, arg):
         '''Navigate to the previous function call.'''
         while self.contract_index <= len(self.contract_trace) - 1:
             self.do_next(arg)
-            if functools.reduce(lambda a, b: a or b, [ node_type == 'FunctionCall' for node_type in self.get_current_step().debug_info ]):
+            if functools.reduce(lambda a, b: a or b, [ node_type == 'FunctionCall' for node_type in self.get_current_step().solidity_ast_nodes ]):
                 break
 
 
@@ -148,7 +170,7 @@ class MacaronShell(cmd.Cmd):
         '''Navigate to the next function call.'''
         while self.contract_index >= 0:
             self.do_prev(arg)
-            if functools.reduce(lambda a, b: a or b, [ node_type == 'FunctionCall' for node_type in self.get_current_step().debug_info ]):
+            if functools.reduce(lambda a, b: a or b, [ node_type == 'FunctionCall' for node_type in self.get_current_step().solidity_ast_nodes ]):
                 break
 
     
@@ -175,18 +197,6 @@ class MacaronShell(cmd.Cmd):
     def do_change_view(self, arg):
         self.high_level_view  = not self.high_level_view
         self.refresh = True
-
-
-    def do_print(self, arg):
-        '''Print the contents of a variable in scope'''
-        try:
-            if arg == '':
-                print('Usage: print VARIABLE_NAME')
-                return            
-
-            print(f'{arg} = {self.access_storage(parse_expression(arg))}')
-        except Exception as e:
-            print(e)
 
 
     # Filesystem commands
@@ -297,6 +307,24 @@ class MacaronShell(cmd.Cmd):
         if arg in self.aliases:
             arg = self.aliases[arg].__name__[3:]
         cmd.Cmd.do_help(self, arg)
+
+
+    def do_print(self, arg):
+        '''Print the contents of a storage variable in scope'''
+        try:
+            if arg == '':
+                print('Usage: print VARIABLE_NAME')
+                return            
+
+            print(f'{arg} = {self.access_storage(parse_expression(arg))}')
+        except Exception as e:
+            print(e)
+
+
+    def do_blocktrace(self, arg):
+        self.block_trace_activated = not self.block_trace_activated
+        self.refresh = True
+
 
     def do_refresh(self, arg):
         '''Refresh the terminal.'''
@@ -442,7 +470,7 @@ class MacaronShell(cmd.Cmd):
 
         try:
             # Stringify the final address to access and add the necessary padding
-            final_address = self.int_to_hex_addr(current_address)
+            final_address = int_to_hex_addr(current_address)
 
             # Use offset for tightly packed variables
             accessed_value = self.value_at_storage_address(final_address, current_offset, current_type_data)
@@ -461,7 +489,7 @@ class MacaronShell(cmd.Cmd):
                     
                     byte_array = ""
                     while read_bytes < bytes_length:
-                        stringified_address = self.int_to_hex_addr(array_address + read_bytes // 32)
+                        stringified_address = int_to_hex_addr(array_address + read_bytes // 32)
                         byte_array += self.value_at_storage_address(stringified_address, current_offset, current_type_data)  
                         read_bytes += 32
                     
@@ -497,11 +525,6 @@ class MacaronShell(cmd.Cmd):
     def value_at_storage_address(self, address, offset, type_data):
         return self.contract_trace[self.contract_index].steps[self.step_index].persistant_data[address][64 - (offset + int(type_data['numberOfBytes']) ) * 2 : 64 - offset * 2]
 
-
-    def int_to_hex_addr(self, address):
-        address = Web3.toHex(address)[2:]
-        return address.zfill(65 - len(address))
-
         
     def get_current_step(self):
         return self.contract_trace[self.contract_index].steps[self.step_index]
@@ -518,78 +541,90 @@ class MacaronShell(cmd.Cmd):
             prev_step_index = len(self.contract_trace[prev_step_contract_index].steps) - 1
         
         return self.contract_trace[prev_step_contract_index].steps[prev_step_index]
+
+    
+    @staticmethod
+    def buff_print(output):
+        lines = output.splitlines()
+        concat_lines = [ "\n".join(lines[i * LINE_LIMIT : i * LINE_LIMIT + LINE_LIMIT]) for i in range(0, int(ceil(len(lines) / LINE_LIMIT )))]
+        for idx, buff in enumerate(concat_lines):
+            print(buff + "\n")
+            if idx == len(concat_lines) - 1 or input(f"{color_note}Press any key to resume printing or \'x\' to stop printing...{color_normal}\n") == 'x':
+                break
     
 
     def print_current_step(self):
         current_step = self.get_current_step()
 
-        storage_changes_str = '\n  '.join([ f'{k}: {v[0]} => {v[1]}' for (k,v) in current_step.storage_changes.items()])
-        storage_changes_str = f'Storage changes:\n  {storage_changes_str}\n\n' if storage_changes_str != '' else ''
+        storage_changes_str = '\n  '.join([ f'{k}: {color_note}{v[0]}{color_normal} => {color_note}{v[1]}{color_normal}' for (k,v) in current_step.storage_changes.items()])
+        storage_changes_str = f'Storage changes:\n  {storage_changes_str}' if storage_changes_str != '' else ''
+        block_trace_str =  f'Block Trace:\n{tabulate(current_step.block_trace, headers=["Pc", "Opcode"])}\n\n' if self.block_trace_activated else ''  
 
-        print(
-            f'{current_step.annotations}{current_step.code}\n'
-            f'{current_step.debug_info}\n'
-            f'{current_step.marking} : {current_step.function_id}\n\n'
-            f'{storage_changes_str}'
-            f'Block Trace: \n  {current_step.block_trace}\n\n'
+        MacaronShell.buff_print(
+            f'{current_step.annotations}{current_step.code}\n\n'
+            f'Solidity AST nodes:\n{current_step.solidity_ast_nodes}\n\n'
+            f'Function call depth: {current_step.depth}\n'
+            f'{storage_changes_str}\n\n'
+            f'{block_trace_str}'
             # f'Storage Entries: {current_step.persistant_data}\n\n'
         )
         
 
     def print_high_level(self):
-        str_buff = ''
-        print(color_normal)
-        for contract in self.contract_trace:
+        tab_buff = ''
+        output = f"{color_normal}"
+        for idx, contract in enumerate(self.contract_trace):
+            
+            used_color = color_highlight if idx == self.contract_index else color_normal
 
             if contract.reason in evm_stack.calls:
-                str_buff += '  '
+                tab_buff += '    '
 
-            print(f"{str_buff}{contract.reason} address {contract.address} : {contract.calldata}\n")
+            output += f"{tab_buff}{used_color}{contract.reason} address {contract.address} : {contract.calldata}{color_normal}\n\n"
 
             if contract.reason not in evm_stack.calls:
-                str_buff = str_buff[:-2]
+                tab_buff = tab_buff[:-4]
+        
+        MacaronShell.buff_print(output)
 
 
 if __name__ == '__main__':
     try:
+        #TODO This is for debugging purposes. Remove it.
+        transaction = None
+        # Mainnet Tests
+        # transaction = '0xa67c14e87755014e75f843aef3db09a5a2d8e54f746e6938b77ea1ccae1ccf2c' # Scheme Registrar v0.5.13
+
+        transaction = '0x4bbea23a4cca98a5231854c48b4f31d71f7b437c681299d23957ebe63542f3fe' # RenBTC v0.5.16
+        # transaction = '0x4ae860eb77a12e3f9a0b0bd83228d066f4249607b5840aa30ca324c77c3073ca' # KyberNetworkProxy v0.6.6
+        # transaction = '0x0f386cd63450bbcbe0d4a4da1354b96c7f1b4f1c6f8b2dcc12971c20aef26194' # KyberStorage v0.6.6
+        # transaction = '0x99d3197f0149bf1dcfebec320f67704358564a768f2fa479342e954e7ec21dfa' # Kyber: Matching Engine v0.6.6
+        # transaction = '0x080a77fa25c18a2cf11e305eddcca06bd47f70d0b3d683e370647aacb9ab8e54' # Bancor Finder v0.5.17 #TODO CREATION
+        # transaction = '0xcf0cc27bb2c9f160c2ac90d419c7c741c58ba4f6e2c4d3546f02b72723985ca8' # Loihi v0.5.15 #TODO Index out of range when stepping and File not found compiler error
+        # transaction = '0x3c5ae6d88316d96bc5b3632aa37dcc7bd1ffcc3217a3b83b36448f1b0f30c67c' # InitializableAdminUpgreadabilityProxy v0.5.14
+
+        # Debug Tests
+        # transaction = '0x247357d9bdac0ddb6fd26641090aad59595c6cd6ec2e89fae16fc3cbdafeb2cb' # Storage Write
+        # transaction = '' # Storage Read
+        # transaction = '0x58b51b4918fbc9f31f026c9eb1494b96af8ad024bfb3603d5aa8a47efb745929' # Rename Slot
+        # transaction = '0x02c9962e1f1f7509704d245af56df099e8a8ff458e94a60320ac9bac141d470f' # Rename Slot with more than 31 bytes
+
+        # transaction = '0x7f444e65cc26c4eae2b0fe66b7cbe9f5b83b8befa23dc7f46f9d22d516d20129' # Send ticket
+
+        # transaction = '0xe52c4aedb8f15aacd8d8e7c074c0736bbf4ebcd0fc08e87dc43f8946cbb5da30' # Clean storage write
+        # transaction = '0x591b7c81bdfd0fdb2d73414df1e5376d2145426210bbc50f95812e790488d0c0' # Fib rec call
+        # transaction = '0xf222aa6dfef05f2c7804a7330fa8fb17dfacdb988b7cdf973c01eed96760720a' # Fib iter call
+        # transaction = '0x6b21aab5da28737ff8a645e7dabfb4c7ac19eb0b4668b1f5169ec4a7a3bb3d6b' # PrimesUntil 30
+        # transaction = '0x2077d345b232480899b6dc9543c44b62f101bbe5fa8716438a1e34c22a1c51d5' # PrimesUntilWhile 30
 
         parser = argparse.ArgumentParser(description='A transaction trace navigation tool for solidity contracts on the ethereum blockchain.')
-        parser.add_argument('--tx', dest = 'transaction_hash', metavar='TX', type=str, nargs=1, help='the hash of the transaction to be explored')
-        parser.add_argument('--db', dest = 'contract_db_data', metavar='HOST PORT USER PASS DB_NAME', type=str, nargs=5, default=None, help='the contract database connection data')
-        parser.add_argument('--cache', dest = 'contract_cache', metavar='C', type=str, nargs='?', default='./local_contract_db', help='the contract cache location that will be used')
+        parser.add_argument('tx', metavar='TX', type=str, nargs='?', default=transaction, help='the hash of the transaction to be explored')
+        parser.add_argument('--db', dest = 'contract_db_data', metavar=('HOST', 'PORT', 'USER', 'PASS', 'DB_NAME'), type=str, nargs=5, default=None, help='the contract database connection data')
+        parser.add_argument('--cache', dest = 'contract_cache', metavar='CACHE_DIR', type=str, nargs='?', default='./local_contract_db', help='the contract cache location that will be used')
         parser.add_argument('--node', dest = 'ethereum_node', metavar='NODE_IP', type=str, nargs='?', default='http://localhost:8545', help='the blockchain node ip which will serve the transaction trace')
         args = parser.parse_args()
-        
-        #TODO This is for debugging purposes. Remove it.
-        if not args.transaction_hash:
-            # Mainnet Tests
-            # transaction = '0xa67c14e87755014e75f843aef3db09a5a2d8e54f746e6938b77ea1ccae1ccf2c' # Scheme Registrar v0.5.13
 
-            # transaction = '0x4bbea23a4cca98a5231854c48b4f31d71f7b437c681299d23957ebe63542f3fe' # RenBTC v0.5.16
-            # transaction = '0x4ae860eb77a12e3f9a0b0bd83228d066f4249607b5840aa30ca324c77c3073ca' # KyberNetworkProxy v0.6.6 #TODO NOT WORKING CORRECTLY
-            transaction = '0x0f386cd63450bbcbe0d4a4da1354b96c7f1b4f1c6f8b2dcc12971c20aef26194' # KyberStorage v0.6.6
-            # transaction = '0x99d3197f0149bf1dcfebec320f67704358564a768f2fa479342e954e7ec21dfa' # Kyber: Matching Engine v0.6.6
-            # transaction = '0x080a77fa25c18a2cf11e305eddcca06bd47f70d0b3d683e370647aacb9ab8e54' # Bancor Finder v0.5.17 #TODO CREATION
-            # transaction = '0xcf0cc27bb2c9f160c2ac90d419c7c741c58ba4f6e2c4d3546f02b72723985ca8' # Loihi v0.5.15 #TODO Index out of range when stepping
-            # transaction = '0x3c5ae6d88316d96bc5b3632aa37dcc7bd1ffcc3217a3b83b36448f1b0f30c67c' # InitializableAdminUpgreadabilityProxy v0.5.14
 
-            # Debug Tests
-            # transaction = '0x247357d9bdac0ddb6fd26641090aad59595c6cd6ec2e89fae16fc3cbdafeb2cb' # Storage Write
-            # transaction = '' # Storage Read
-            # transaction = '0x58b51b4918fbc9f31f026c9eb1494b96af8ad024bfb3603d5aa8a47efb745929' # Rename Slot
-            # transaction = '0x02c9962e1f1f7509704d245af56df099e8a8ff458e94a60320ac9bac141d470f' # Rename Slot with more than 31 bytes
-
-            # transaction = '0x7f444e65cc26c4eae2b0fe66b7cbe9f5b83b8befa23dc7f46f9d22d516d20129' # Send ticket
-
-            # transaction = '0xe52c4aedb8f15aacd8d8e7c074c0736bbf4ebcd0fc08e87dc43f8946cbb5da30' # Clean storage write
-            # transaction = '0x591b7c81bdfd0fdb2d73414df1e5376d2145426210bbc50f95812e790488d0c0' # Fib rec call
-            # transaction = '0xf222aa6dfef05f2c7804a7330fa8fb17dfacdb988b7cdf973c01eed96760720a' # Fib iter call
-            # transaction = '0x6b21aab5da28737ff8a645e7dabfb4c7ac19eb0b4668b1f5169ec4a7a3bb3d6b' # PrimesUntil 30
-            # transaction = '0x2077d345b232480899b6dc9543c44b62f101bbe5fa8716438a1e34c22a1c51d5' # PrimesUntilWhile 30
-        else:
-            transaction = args.transaction_hash[0]
-
-        #TODO unpack db arguments from command line
         if args.contract_db_data:
             h, p, u, pwd, db = args.contract_db_data
             conn = pymysql.connect(
@@ -603,11 +638,11 @@ if __name__ == '__main__':
         else:
             conn = None
 
-
+        # TODO Remove profiler code after completion of project
         # pr = cProfile.Profile()
 
         # pr.enable()
-        navigator = MacaronShell(transaction, conn, args.ethereum_node, args.contract_cache)
+        navigator = MacaronShell(args.tx, conn, args.ethereum_node, args.contract_cache)
         # pr.disable()
 
         # s = io.StringIO()
