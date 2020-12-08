@@ -4,6 +4,7 @@ from web3_connections import *
 from dataclasses import dataclass
 import config
 import json
+from macaron_utils import print_err
 # import tokens
 import os.path
 import pickle
@@ -148,7 +149,7 @@ class EVMExecuctionStack:
     def head(self):
         return self.trace[-1]
         
-
+    # TODO Decide what to do with this
     def track_storage(self, t):
         last_stack = self.evm.stack[-1]
         op = t['op']
@@ -198,9 +199,15 @@ class EVMExecuctionStack:
             print(e)
             exit(1)
 
-        transaction_data = get_transactionData(transaction, rpc_endpoint)
-        # TODO this assertion makes it so that contract creation trasnactions cannot be examined with this tool, fix this
-        assert transaction_data['result']['to'] != None
+        try:
+            transaction_data = get_transactionData(transaction, rpc_endpoint)
+             # TODO this assertion makes it so that contract creation trasnactions cannot be examined with this tool, fix this
+            assert transaction_data['result']['to'] != None
+        except Exception:
+            print_err(f"Could not achieve a connection to rpc_endpoint \'{rpc_endpoint}\'")
+            exit()
+
+        # Begin replaying the trace
         self.entry(transaction_data['result'])
     
         prev_t = {'depth': 0, 'op': None}

@@ -173,3 +173,6 @@ def format_address(a):
             return ret
     else:
         return config.api.toChecksumAddress(a)
+
+def print_err(msg):
+    print(f"{color_error}Error: {msg}{color_normal}.")

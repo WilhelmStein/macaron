@@ -627,14 +627,18 @@ if __name__ == '__main__':
 
         if args.contract_db_data:
             h, p, u, pwd, db = args.contract_db_data
-            conn = pymysql.connect(
-                host=h,
-                port=int(p),
-                user=u,
-                passwd=pwd,
-                db=db,
-                read_timeout=int(3),
-                charset='utf8mb4')
+            try:
+                conn = pymysql.connect(
+                    host=h,
+                    port=int(p),
+                    user=u,
+                    passwd=pwd,
+                    db=db,
+                    read_timeout=int(3),
+                    charset='utf8mb4')
+            except Exception:
+                print_err(f"Could not connect to contract_db \'{db}\' on \'{u}@{h}:{p}\'")
+                exit()
         else:
             conn = None
 
@@ -654,12 +658,10 @@ if __name__ == '__main__':
 
         navigator.cmdloop()
     except Exception:
-        import pdb
         import traceback
 
-        print(color_reset) # Reset terminal colors
+        print(color_error)
         extype, value, tb = sys.exc_info()
         traceback.print_exc()
-
-        pdb.post_mortem(tb)
+        print(color_reset)
         
