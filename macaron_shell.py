@@ -590,13 +590,12 @@ class MacaronShell(cmd.Cmd):
 if __name__ == "__main__":
     try:
         # TODO This is for debugging purposes. Remove it.
-        transaction = None
         # Mainnet Tests
         # transaction = '0xa67c14e87755014e75f843aef3db09a5a2d8e54f746e6938b77ea1ccae1ccf2c' # Scheme Registrar v0.5.13
 
         # transaction = '0x4bbea23a4cca98a5231854c48b4f31d71f7b437c681299d23957ebe63542f3fe' # RenBTC v0.5.16
         # transaction = '0x4ae860eb77a12e3f9a0b0bd83228d066f4249607b5840aa30ca324c77c3073ca' # KyberNetworkProxy v0.6.6
-        transaction = '0x0f386cd63450bbcbe0d4a4da1354b96c7f1b4f1c6f8b2dcc12971c20aef26194' # KyberStorage v0.6.6
+        # transaction = '0x0f386cd63450bbcbe0d4a4da1354b96c7f1b4f1c6f8b2dcc12971c20aef26194' # KyberStorage v0.6.6
         # transaction = '0x99d3197f0149bf1dcfebec320f67704358564a768f2fa479342e954e7ec21dfa' # Kyber: Matching Engine v0.6.6
         # transaction = "0x3c5ae6d88316d96bc5b3632aa37dcc7bd1ffcc3217a3b83b36448f1b0f30c67c"  # InitializableAdminUpgreadabilityProxy v0.5.14
 
@@ -621,8 +620,7 @@ if __name__ == "__main__":
             "tx",
             metavar="TX",
             type=str,
-            nargs="?",
-            default=transaction,
+            nargs=1,
             help="the hash of the transaction to be explored",
         )
         parser.add_argument(

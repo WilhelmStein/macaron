@@ -7,3 +7,11 @@ This is a tool which upon being supplied with a transaction hash, the solidity c
 
 ## Installation
 Run setup.sh
+
+## Usage
+
+After running the setup.sh file, make sure you have an established connection (e.g. ssh tunneling) to a mysql database that contains the contract source code and to an ethereum node that has the **debug_traceTransaction** rpc call enabled (e.g. geth).
+
+Navigate to the project root directory and run `. ./env/activate`. Now the virtual python environment has been activated.
+
+Run `python macaron_shell.py -h` to see which arguments much be supplied.
