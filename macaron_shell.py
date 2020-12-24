@@ -600,7 +600,7 @@ if __name__ == "__main__":
         # transaction = "0x3c5ae6d88316d96bc5b3632aa37dcc7bd1ffcc3217a3b83b36448f1b0f30c67c"  # InitializableAdminUpgreadabilityProxy v0.5.14
 
         # Debug Tests
-        # transaction = '0x247357d9bdac0ddb6fd26641090aad59595c6cd6ec2e89fae16fc3cbdafeb2cb' # Storage Write
+        # transaction = '0x3bf59e0e7b55135376bb2aa9c1fca5510694ac7cc157f2236a9d158ca34298ee' # Storage Write
         # transaction = '' # Storage Read
         # transaction = '0x58b51b4918fbc9f31f026c9eb1494b96af8ad024bfb3603d5aa8a47efb745929' # Rename Slot
         # transaction = '0x02c9962e1f1f7509704d245af56df099e8a8ff458e94a60320ac9bac141d470f' # Rename Slot with more than 31 bytes
@@ -608,7 +608,7 @@ if __name__ == "__main__":
         # transaction = '0x7f444e65cc26c4eae2b0fe66b7cbe9f5b83b8befa23dc7f46f9d22d516d20129' # Send ticket
 
         # transaction = '0xe52c4aedb8f15aacd8d8e7c074c0736bbf4ebcd0fc08e87dc43f8946cbb5da30' # Clean storage write
-        # transaction = '0x591b7c81bdfd0fdb2d73414df1e5376d2145426210bbc50f95812e790488d0c0' # Fib rec call
+        # transaction = '0xb53cae66a07a354583dfc336559c64ad19a03902239d236ebbc4e800d18bd4ba' # Fib rec call
         # transaction = '0xf222aa6dfef05f2c7804a7330fa8fb17dfacdb988b7cdf973c01eed96760720a' # Fib iter call
         # transaction = '0x6b21aab5da28737ff8a645e7dabfb4c7ac19eb0b4668b1f5169ec4a7a3bb3d6b' # PrimesUntil 30
         # transaction = '0x2077d345b232480899b6dc9543c44b62f101bbe5fa8716438a1e34c22a1c51d5' # PrimesUntilWhile 30
@@ -670,7 +670,7 @@ if __name__ == "__main__":
         else:
             conn = None
 
-        navigator = MacaronShell(args.tx, conn, args.ethereum_node, args.contract_cache)
+        navigator = MacaronShell(args.tx[0], conn, args.ethereum_node, args.contract_cache)
 
         navigator.cmdloop()
     except Exception:
