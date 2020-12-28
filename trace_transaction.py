@@ -39,6 +39,13 @@ query_source = """
   and a.network = 'Ethereum'
 """
 
+query_source = """
+  select d.*
+  from address a
+  join source_code d on a.md5_bytecode = d.md5_bytecode and d.`code` is not null
+  where a.address = '%s'
+  and a.network = 'Ethereum'
+"""
 
 NodeWrapper = namedtuple("NodeWrapper", ["node", "lineage"])
 
@@ -579,7 +586,7 @@ def calculate_trace_display(stack, conn=None, local_db_path="./local_contract_db
             elif source_index == -1:
                 pass
             else:
-                current_step_code += f"{color_warning}Could not find ast node from source mapping: {source_from} : {source_length} : {source_index}{color_normal}"
+                current_step_code += f"{color_warning}Could not find ast node from source mapping: {source_from} : {source_length} : {source_index}{color_normal}\n"
 
         line_index = __create_source_index(code)
 
