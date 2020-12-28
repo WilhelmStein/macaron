@@ -91,7 +91,7 @@ class EVMExecuctionStack:
         self.calldatas.append(starting_calldata)
         self.stack.append(self.TraceEntry(address, "ENTRY", starting_calldata, value))
         self.memory.append(bytearray(b"\0" * MAX_MEMORY))
-        self.do_trace("ENTRY", starting_calldata, value)
+        self.do_trace("0x0:ENTRY", starting_calldata, value)
 
     def do_trace(self, reason, detail="", value=0):
         last_stack = self.stack[-1]
@@ -134,7 +134,7 @@ class EVMExecuctionStack:
         if t["op"] in ["CREATE", "CREATE2"]:
             calldata = "New Contract Creation"
         self.stack.append(self.TraceEntry(address, t["op"], calldata, value))
-        self.do_trace(reason=t["op"], detail=calldata, value=value)
+        self.do_trace(reason=f'{hex(t["pc"])}:{t["op"]}', detail=calldata, value=value)
 
     def codecopy(self, memstart, codestart, length):
         memstart, codestart, length = (

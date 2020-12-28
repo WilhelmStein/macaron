@@ -575,13 +575,13 @@ class MacaronShell(cmd.Cmd):
         for idx, contract in enumerate(self.contract_trace):
 
             used_color = color_highlight if idx == self.contract_index else color_normal
-
-            if contract.reason in evm_stack.calls:
+            pc, opcode = contract.reason.split(':')
+            if opcode in evm_stack.calls:
                 tab_buff += "    "
 
-            output += f"{tab_buff}{used_color}{contract.reason} address {contract.address} : {contract.calldata}{color_normal}\n\n"
+            output += f'{tab_buff}{used_color}{opcode} at pc("{pc}"), on address {contract.address} : {contract.calldata}{color_normal}\n\n'
 
-            if contract.reason not in evm_stack.calls:
+            if opcode not in evm_stack.calls:
                 tab_buff = tab_buff[:-4]
 
         MacaronShell.buff_print(output)
