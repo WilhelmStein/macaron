@@ -1,7 +1,7 @@
 .vscode
-.pkl
+*.pkl
 __pycache__
 env
 local_contract_db
 local_testing_db
-.log
+*.log
