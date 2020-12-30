@@ -204,11 +204,11 @@ class EVMExecuctionStack:
             print_err(
                 f"Could not achieve a connection to rpc_endpoint '{rpc_endpoint}'"
             )
-            exit()
+            exit(1)
 
         if transaction_data["result"]["to"] == None:
             print_err("Contract creation transactions cannot be traced")
-            exit()
+            exit(1)
 
         # Begin replaying the trace
         self.entry(transaction_data["result"])

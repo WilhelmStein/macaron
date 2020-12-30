@@ -20,7 +20,7 @@ from web3 import Web3
 
 class MacaronShell(cmd.Cmd):
 
-    clear = "\033c\033"
+    clear = "\033[2J\033[H"
 
     intro = f"{color_normal}Macaron Navigator Prototype"
     prompt = ">:"
@@ -327,7 +327,6 @@ class MacaronShell(cmd.Cmd):
         if self.refresh:
             self.refresh = False
             print(f"{self.clear}{color_normal}")  # Reset Terminal
-
             if self.high_level_view:
                 self.print_high_level()
             else:
@@ -666,7 +665,7 @@ if __name__ == "__main__":
                 )
             except Exception:
                 print_err(f"Could not connect to contract_db '{db}' on '{u}@{h}:{p}'")
-                exit()
+                exit(1)
         else:
             conn = None
 
