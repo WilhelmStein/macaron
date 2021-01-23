@@ -15,3 +15,7 @@ After running the setup.sh file, make sure you have an established connection (e
 Navigate to the project root directory and run `. ./env/activate`. Now the virtual python environment has been activated.
 
 Run `python macaron_shell.py -h` to see which arguments much be supplied.
+
+## More Information
+
+More information regarding the inner workings of this project can be found [here](https://pergamos.lib.uoa.gr/uoa/dl/frontend/el/browse/2932336). 
