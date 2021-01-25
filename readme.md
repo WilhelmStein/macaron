@@ -18,4 +18,4 @@ Run `python macaron_shell.py -h` to see which arguments much be supplied.
 
 ## More Information
 
-More information regarding the inner workings of this project can be found [here](https://pergamos.lib.uoa.gr/uoa/dl/frontend/el/browse/2932336). 
+More information regarding the inner workings of this project can be found [here](https://pergamos.lib.uoa.gr/uoa/dl/frontend/file/lib/default/data/2932336/theFile). 
